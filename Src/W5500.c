@@ -201,8 +201,472 @@ void W5500_InitPeripheral(w5500_t* w5500){
     w5500->is_initialized = true;
 }
 
+int8_t W5500_SocketInit(socket_t* sock, uint8_t socket_num, uint8_t protocol, uint16_t port){
+    // Walidacja parametrów (podobnie jak w spi_init_config)
+    if (!sock || socket_num >= W5500_MAX_SOCKETS) {
+        return W5500_INVALID_SOCKET;
+    }
 
+    // Walidacja protokołu
+    if (protocol != W5500_Sn_MR_PROTOCOL_CLOSED &&
+        protocol != W5500_Sn_MR_PROTOCOL_TCP &&
+        protocol != W5500_Sn_MR_PROTOCOL_UDP &&
+        protocol != W5500_Sn_MR_PROTOCOL_MACRAW) {
+        return W5500_ERROR;
+        }
 
+    // MACRAW tylko dla socketu 0 (zgodnie z datasheetem)
+    if (protocol == W5500_Sn_MR_PROTOCOL_MACRAW && socket_num != 0) {
+        return W5500_ERROR;
+    }
+
+    // Wyzerowanie struktury socketu (podobnie jak w spi_init_config)
+    memset(sock, 0, sizeof(socket_t));
+
+    // Ustawienie podstawowych parametrów
+    sock->socket_num = socket_num;
+    sock->protocol = protocol;
+    sock->source_port = port;
+    sock->status = W5500_Sn_SR_SOCK_CLOSED;
+
+    // Inicjalizacja flag w stanie domyślnym
+    sock->flags.is_open = false;
+    sock->flags.is_connected = false;
+    sock->flags.has_data = false;
+
+    // Wyzerowanie adresów docelowych
+    memset(sock->dest_ip, 0, 4);
+    sock->dest_port = 0;
+
+    return W5500_OK;
+}
+
+int8_t W5500_SocketOpen(const w5500_t* w5500, socket_t* sock){
+    // Walidacja parametrów (podobnie jak w spi_init_peripheral)
+    if (!w5500 || !w5500->spi || !sock) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdzenie numeru socketu
+    if (sock->socket_num >= W5500_MAX_SOCKETS) {
+        return W5500_INVALID_SOCKET;
+    }
+
+    // Sprawdzenie czy socket nie jest już otwarty
+    if (sock->flags.is_open) {
+        return W5500_OK; // Już otwarty
+    }
+
+    uint8_t bsb = W5500_GetSocketBSB_REG(sock->socket_num);
+
+    // 1. Ustaw protokół socketu w rejestrze SnMR
+    W5500_WriteReg(w5500, W5500_Sn_MR, bsb, &sock->protocol, 1);
+
+    // 2. Ustaw port źródłowy (jeśli podany)
+    if (sock->source_port != 0) {
+        uint8_t port_bytes[2] = {(uint8_t)(sock->source_port >> 8), (uint8_t)(sock->source_port & 0xFF)};
+        W5500_WriteReg(w5500, W5500_Sn_PORT0, bsb, port_bytes, 2);
+    }
+
+    // 3. Wyślij komendę OPEN
+    uint8_t command = W5500_Sn_CR_OPEN;
+    W5500_WriteReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+
+    // 4. Czekaj na zakończenie komendy (podobnie jak w InitPeripheral)
+    uint32_t timeout = 100000;
+    do {
+        W5500_ReadReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+        timeout--;
+    } while (command != 0x00 && timeout > 0);
+
+    if (timeout == 0) {
+        return W5500_TIMEOUT;
+    }
+
+    // 5. Sprawdź status socketu i aktualizuj flagę
+    W5500_ReadReg(w5500, W5500_Sn_SR, bsb, &sock->status, 1);
+
+    // Sprawdź czy socket został poprawnie otwarty (zgodnie z datasheetem)
+    if (sock->status == W5500_Sn_SR_SOCK_INIT ||      // TCP
+        sock->status == W5500_Sn_SR_SOCK_UDP ||       // UDP
+        sock->status == W5500_Sn_SR_SOCK_MACRAW) {    // MACRAW
+
+        sock->flags.is_open = true;
+        return W5500_OK;
+        }
+
+    return W5500_ERROR;
+}
+
+int8_t W5500_SocketClose(const w5500_t* w5500, socket_t* sock){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi || !sock) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdzenie numeru socketu
+    if (sock->socket_num >= W5500_MAX_SOCKETS) {
+        return W5500_INVALID_SOCKET;
+    }
+
+    uint8_t bsb = W5500_GetSocketBSB_REG(sock->socket_num);
+
+    // 1. Wyślij komendę CLOSE
+    uint8_t command = W5500_Sn_CR_CLOSE;
+    W5500_WriteReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+
+    // 2. Czekaj na zakończenie komendy
+    uint32_t timeout = 100000;
+    do {
+        W5500_ReadReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+        timeout--;
+    } while (command != 0x00 && timeout > 0);
+
+    if (timeout == 0) {
+        return W5500_TIMEOUT;
+    }
+
+    // 3. Sprawdź status socketu
+    W5500_ReadReg(w5500, W5500_Sn_SR, bsb, &sock->status, 1);
+
+    // 4. Reset flag socketu (niezależnie od statusu - socket jest zamykany)
+    sock->flags.is_open = false;
+    sock->flags.is_connected = false;
+    sock->flags.has_data = false;
+
+    // 5. Sprawdź czy socket został poprawnie zamknięty
+    if (sock->status == W5500_Sn_SR_SOCK_CLOSED) {
+        return W5500_OK;
+    }
+
+    // Jeśli status nie jest CLOSED, ale komendy się wykonała, to też OK
+    // (czasami może być opóźnienie w aktualizacji statusu)
+    return W5500_OK;
+}
+
+void W5500_WriteBuffer(const w5500_t* w5500, uint16_t addr, uint8_t bsb, const uint8_t* data, uint16_t len){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi || !data || len == 0) {
+        return;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return;
+    }
+
+    // Budowanie bajtu kontrolnego
+    uint8_t control_byte = (bsb << W5500_SPI_BSB_Pos) |
+                          (1U << W5500_SPI_RWB_Pos) |
+                          W5500_SPI_OM_VDM;
+
+    // Aktywacja CS (LOW)
+    spi_set_cs(w5500->spi, false);
+
+    // Wysłanie adresu i kontroli (bez DMA - krótkie)
+    spi_send(w5500->spi, (uint8_t)(addr >> 8));
+    spi_send(w5500->spi, (uint8_t)(addr & 0xFF));
+    spi_send(w5500->spi, control_byte);
+
+    // **KLUCZOWE: Wysłanie danych przez DMA**
+    if (len > 16) {  // DMA dla większych bloków
+        spi_dma_send((spi_t*)w5500->spi, data, len);
+
+        // Czekaj na zakończenie DMA
+        while (spi_is_dma_tx_busy((spi_t*)w5500->spi)) {
+            // Można dodać timeout
+        }
+    } else {
+        // Dla małych bloków - zwykłe SPI
+        for (uint16_t i = 0; i < len; i++) {
+            spi_send(w5500->spi, data[i]);
+        }
+    }
+
+    // Deaktywacja CS (HIGH) - automatyczna w spi_dma_send()
+    // spi_set_cs(w5500->spi, true); // Już zrobione przez DMA
+}
+
+void W5500_ReadBuffer(const w5500_t* w5500, uint16_t addr, uint8_t bsb, uint8_t* data, uint16_t len){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi || !data || len == 0) {
+        return;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return;
+    }
+
+    // Budowanie bajtu kontrolnego
+    uint8_t control_byte = (bsb << W5500_SPI_BSB_Pos) |
+                          (0U << W5500_SPI_RWB_Pos) |
+                          W5500_SPI_OM_VDM;
+
+    // Aktywacja CS (LOW)
+    spi_set_cs(w5500->spi, false);
+
+    // Wysłanie adresu i kontroli
+    spi_send(w5500->spi, (uint8_t)(addr >> 8));
+    spi_send(w5500->spi, (uint8_t)(addr & 0xFF));
+    spi_send(w5500->spi, control_byte);
+
+    // **KLUCZOWE: Odczyt danych przez DMA**
+    if (len > 16) {  // DMA dla większych bloków
+        spi_dma_read((spi_t*)w5500->spi, data, len);
+
+        // Czekaj na zakończenie DMA
+        while (spi_is_dma_rx_busy((spi_t*)w5500->spi)) {
+            // Można dodać timeout
+        }
+    } else {
+        // Dla małych bloków - zwykłe SPI
+        for (uint16_t i = 0; i < len; i++) {
+            data[i] = spi_read(w5500->spi);
+        }
+    }
+
+    // CS już zdeaktywowany przez DMA
+}
+
+int16_t W5500_SocketReceiveTCP(const w5500_t* w5500, socket_t* sock,
+                              uint8_t* buffer, uint16_t max_len){
+    // Walidacja parametrów
+    if (!w5500 || !sock || !buffer || max_len == 0) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdź czy to socket TCP
+    if (sock->protocol != W5500_Sn_MR_PROTOCOL_TCP) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdź czy socket jest połączony
+    if (!sock->flags.is_connected) {
+        return W5500_ERROR;
+    }
+
+    uint8_t bsb = W5500_GetSocketBSB_REG(sock->socket_num);
+
+    // Sprawdź ile danych jest dostępnych
+    uint8_t rx_size_bytes[2];
+    W5500_ReadReg(w5500, W5500_Sn_RXRSR0, bsb, rx_size_bytes, 2);
+    uint16_t available_data = (rx_size_bytes[0] << 8) | rx_size_bytes[1];
+
+    if (available_data == 0) {
+        return W5500_NO_DATA;
+    }
+
+    // Ogranicz do rozmiaru bufora
+    uint16_t to_read = (available_data > max_len) ? max_len : available_data;
+
+    // Pobierz RX Read Pointer
+    uint8_t rx_rd_bytes[2];
+    W5500_ReadReg(w5500, W5500_Sn_RXRD0, bsb, rx_rd_bytes, 2);
+    uint16_t rx_rd_ptr = (rx_rd_bytes[0] << 8) | rx_rd_bytes[1];
+
+    // Odczytaj dane przez DMA
+    uint8_t rx_bsb = W5500_GetSocketBSB_RX(sock->socket_num);
+    W5500_ReadBuffer(w5500, rx_rd_ptr, rx_bsb, buffer, to_read);
+
+    // Aktualizuj RX Read Pointer
+    rx_rd_ptr += to_read;
+    rx_rd_bytes[0] = (uint8_t)(rx_rd_ptr >> 8);
+    rx_rd_bytes[1] = (uint8_t)(rx_rd_ptr & 0xFF);
+    W5500_WriteReg(w5500, W5500_Sn_RXRD0, bsb, rx_rd_bytes, 2);
+
+    // Potwierdź odczyt
+    uint8_t command = W5500_Sn_CR_RECV;
+    W5500_WriteReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+
+    return to_read;
+}
+
+int16_t W5500_SocketReceiveUDP(const w5500_t* w5500, socket_t* sock, uint8_t* buffer,
+                                uint16_t max_len, w5500_packet_info_t* packet_info){
+    // Walidacja parametrów
+    if (!w5500 || !sock || !buffer || max_len == 0) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdź czy to socket UDP
+    if (sock->protocol != W5500_Sn_MR_PROTOCOL_UDP) {
+        return W5500_ERROR;
+    }
+
+    uint8_t bsb = W5500_GetSocketBSB_REG(sock->socket_num);
+
+    // Sprawdź ile danych jest dostępnych
+    uint8_t rx_size_bytes[2];
+    W5500_ReadReg(w5500, W5500_Sn_RXRSR0, bsb, rx_size_bytes, 2);
+    uint16_t available_data = (rx_size_bytes[0] << 8) | rx_size_bytes[1];
+
+    if (available_data < 8) {
+        return W5500_NO_DATA; // Minimum nagłówek UDP
+    }
+
+    // Pobierz RX Read Pointer
+    uint8_t rx_rd_bytes[2];
+    W5500_ReadReg(w5500, W5500_Sn_RXRD0, bsb, rx_rd_bytes, 2);
+    uint16_t rx_rd_ptr = (rx_rd_bytes[0] << 8) | rx_rd_bytes[1];
+
+    // **ETAP 1: Odczytaj nagłówek UDP (8 bajtów)**
+    uint8_t udp_header[8];
+    uint8_t rx_bsb = W5500_GetSocketBSB_RX(sock->socket_num);
+    W5500_ReadBuffer(w5500, rx_rd_ptr, rx_bsb, udp_header, 8);
+
+    // **ETAP 2: Wyciągnij informacje z nagłówka**
+    uint16_t packet_length = (udp_header[6] << 8) | udp_header[7];
+
+    // Sprawdź czy cały pakiet jest dostępny
+    if (available_data < (8 + packet_length)) {
+        // Pakiet niekompletny - ustaw flagę
+        if (packet_info) {
+            packet_info->is_complete = false;
+            packet_info->packet_length = packet_length;
+        }
+        return W5500_INCOMPLETE_PACKET;
+    }
+
+    // Sprawdź czy bufor wystarczy
+    if (packet_length > max_len) {
+        packet_length = max_len;
+    }
+
+    // **ETAP 3: Odczytaj dane pakietu**
+    W5500_ReadBuffer(w5500, rx_rd_ptr + 8, rx_bsb, buffer, packet_length);
+
+    // **ETAP 4: Wypełnij informacje o pakiecie**
+    if (packet_info) {
+        // IP nadawcy
+        packet_info->src_ip[0] = udp_header[0];
+        packet_info->src_ip[1] = udp_header[1];
+        packet_info->src_ip[2] = udp_header[2];
+        packet_info->src_ip[3] = udp_header[3];
+
+        // Port nadawcy
+        packet_info->src_port = (udp_header[4] << 8) | udp_header[5];
+
+        // Długość i status
+        packet_info->packet_length = packet_length;
+        packet_info->is_complete = true;
+
+        // Wyzeruj pola MACRAW
+        memset(packet_info->src_mac, 0, 6);
+        packet_info->ethertype = 0;
+    }
+
+    // **ETAP 5: Aktualizuj wskaźnik**
+    rx_rd_ptr += 8 + packet_length;
+    rx_rd_bytes[0] = (uint8_t)(rx_rd_ptr >> 8);
+    rx_rd_bytes[1] = (uint8_t)(rx_rd_ptr & 0xFF);
+    W5500_WriteReg(w5500, W5500_Sn_RXRD0, bsb, rx_rd_bytes, 2);
+
+    // Potwierdź odczyt
+    uint8_t command = W5500_Sn_CR_RECV;
+    W5500_WriteReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+
+    return packet_length;
+}
+
+int16_t W5500_SocketReceiveMACRAW(const w5500_t* w5500, socket_t* sock, uint8_t* buffer, uint16_t max_len,
+                                    w5500_packet_info_t* packet_info){
+    // Walidacja parametrów
+    if (!w5500 || !sock || !buffer || max_len == 0) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdź czy to socket MACRAW (tylko Socket 0)
+    if (sock->protocol != W5500_Sn_MR_PROTOCOL_MACRAW || sock->socket_num != 0) {
+        return W5500_ERROR;
+    }
+
+    uint8_t bsb = W5500_GetSocketBSB_REG(0);
+
+    // Sprawdź ile danych jest dostępnych
+    uint8_t rx_size_bytes[2];
+    W5500_ReadReg(w5500, W5500_Sn_RXRSR0, bsb, rx_size_bytes, 2);
+    uint16_t available_data = (rx_size_bytes[0] << 8) | rx_size_bytes[1];
+
+    if (available_data < 2) {
+        return W5500_NO_DATA; // Minimum nagłówek długości
+    }
+
+    // Pobierz RX Read Pointer
+    uint8_t rx_rd_bytes[2];
+    W5500_ReadReg(w5500, W5500_Sn_RXRD0, bsb, rx_rd_bytes, 2);
+    uint16_t rx_rd_ptr = (rx_rd_bytes[0] << 8) | rx_rd_bytes[1];
+
+    // **ETAP 1: Odczytaj nagłówek długości (2 bajty)**
+    uint8_t length_header[2];
+    uint8_t rx_bsb = W5500_GetSocketBSB_RX(0);
+    W5500_ReadBuffer(w5500, rx_rd_ptr, rx_bsb, length_header, 2);
+
+    // **ETAP 2: Wyciągnij długość ramki**
+    uint16_t frame_length = (length_header[0] << 8) | length_header[1];
+
+    // Sprawdź czy cała ramka jest dostępna
+    if (available_data < (2 + frame_length)) {
+        // Ramka niekompletna
+        if (packet_info) {
+            packet_info->is_complete = false;
+            packet_info->packet_length = frame_length;
+        }
+        return W5500_INCOMPLETE_PACKET;
+    }
+
+    // Sprawdź rozmiar ramki (64-1514 bajtów dla Ethernet)
+    if (frame_length < 64 || frame_length > 1514) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdź czy bufor wystarczy
+    if (frame_length > max_len) {
+        frame_length = max_len;
+    }
+
+    // **ETAP 3: Odczytaj ramkę Ethernet**
+    W5500_ReadBuffer(w5500, rx_rd_ptr + 2, rx_bsb, buffer, frame_length);
+
+    // **ETAP 4: Wypełnij informacje o ramce**
+    if (packet_info && frame_length >= 14) {
+        // MAC nadawcy (bajty 6-11 ramki Ethernet)
+        memcpy(packet_info->src_mac, &buffer[6], 6);
+
+        // EtherType (bajty 12-13)
+        packet_info->ethertype = (buffer[12] << 8) | buffer[13];
+
+        // Długość i status
+        packet_info->packet_length = frame_length;
+        packet_info->is_complete = true;
+
+        // Wyzeruj pola UDP
+        memset(packet_info->src_ip, 0, 4);
+        packet_info->src_port = 0;
+    }
+
+    // **ETAP 5: Aktualizuj wskaźnik**
+    rx_rd_ptr += 2 + frame_length;
+    rx_rd_bytes[0] = (uint8_t)(rx_rd_ptr >> 8);
+    rx_rd_bytes[1] = (uint8_t)(rx_rd_ptr & 0xFF);
+    W5500_WriteReg(w5500, W5500_Sn_RXRD0, bsb, rx_rd_bytes, 2);
+
+    // Potwierdź odczyt
+    uint8_t command = W5500_Sn_CR_RECV;
+    W5500_WriteReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+
+    return frame_length;
+}
 
 
 void W5500_WriteReg(const w5500_t* w5500, uint16_t addr, uint8_t bsb, const void* data, uint8_t size){

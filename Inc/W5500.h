@@ -14,6 +14,8 @@
 #define W5500_TIMEOUT           -3
 #define W5500_INVALID_SOCKET    -4
 #define W5500_BUFFER_FULL       -5
+#define W5500_INCOMPLETE_PACKET -6  // Pakiet niekompletny
+#define W5500_NO_DATA           -7   // Brak danych
 
 // Maksymalna liczba socketów
 #define W5500_MAX_SOCKETS       8
@@ -64,6 +66,17 @@ typedef struct {
     uint8_t active_sockets;              // Liczba aktywnych socketów
 } w5500_t;
 
+// Struktura dla informacji o pakiecie UDP/MACRAW
+typedef struct {
+    uint8_t src_ip[4];           // IP nadawcy (tylko UDP)
+    uint16_t src_port;           // Port nadawcy (tylko UDP)
+    uint8_t src_mac[6];          // MAC nadawcy (tylko MACRAW)
+    uint16_t ethertype;          // EtherType (tylko MACRAW)
+    uint16_t packet_length;      // Długość danych pakietu
+    bool is_complete;            // Czy pakiet jest kompletny
+} w5500_packet_info_t;
+
+
 // ============================================================================
 // FUNKCJE INICJALIZACJI I KONFIGURACJI
 // ============================================================================
@@ -75,7 +88,7 @@ void W5500_InitDefault(w5500_t* w5500, const spi_t* spi);                       
 void W5500_InitConfig(w5500_t* w5500, const spi_t* spi, const w5500_network_config_t* config);                  //S
 
 // Inicjalizacja peryferiów (podobnie jak w SPI)
-void W5500_InitPeripheral(w5500_t* w5500);                                                                //S
+void W5500_InitPeripheral(w5500_t* w5500);                                                                      //S
 
 // Reset układu
 void W5500_Reset(const w5500_t* w5500);
@@ -131,9 +144,18 @@ int8_t W5500_SocketDisconnect(const w5500_t* w5500, socket_t* sock);
 
 // Transmisja danych (podobnie jak spi_dma_send/read)
 int16_t W5500_SocketSend(const w5500_t* w5500, socket_t* sock, const uint8_t* data, uint16_t len);
-int16_t W5500_SocketReceive(const w5500_t* w5500, socket_t* sock, uint8_t* buffer, uint16_t max_len);
 int16_t W5500_SocketSendTo(const w5500_t* w5500, socket_t* sock, const uint8_t* data, uint16_t len,
-                          const uint8_t* dest_ip, uint16_t dest_port);
+                            const uint8_t* dest_ip, uint16_t dest_port);
+int16_t W5500_SocketSendRaw(const w5500_t* w5500, socket_t* sock, const uint8_t* data, uint16_t len);
+
+//  Odbiór danych
+int16_t W5500_SocketReceiveTCP(const w5500_t* w5500, socket_t* sock,uint8_t* buffer, uint16_t max_len);
+int16_t W5500_SocketReceiveUDP(const w5500_t* w5500, socket_t* sock, uint8_t* buffer, uint16_t max_len,
+                                w5500_packet_info_t* packet_info);
+int16_t W5500_SocketReceiveMACRAW(const w5500_t* w5500, socket_t* sock, uint8_t* buffer,
+                                uint16_t max_len, w5500_packet_info_t* packet_info);
+
+
 
 // ============================================================================
 // FUNKCJE MONITOROWANIA STANU (podobnie jak spi_is_dma_busy itp.)
@@ -157,17 +179,17 @@ bool W5500_SelfTest(const w5500_t* w5500);
 // Zarządzanie buforami
 void W5500_SetBufferSizes(const w5500_t* w5500, const uint8_t* tx_sizes, const uint8_t* rx_sizes);
 
-// Funkcje pomocnicze dla BSB
+// Poprawione funkcje BSB (zgodnie z datasheetem)
 static inline uint8_t W5500_GetSocketBSB_REG(uint8_t socket_num) {
-    return (socket_num == 0) ? W5500_BSB_SOCKET0_REG : (W5500_BSB_SOCKET0_REG + (socket_num * 4));
+    return W5500_BSB_SOCKET0_REG + (socket_num * 4);
 }
 
 static inline uint8_t W5500_GetSocketBSB_TX(uint8_t socket_num) {
-    return (socket_num == 0) ? W5500_BSB_SOCKET0_TX : (W5500_BSB_SOCKET0_TX + (socket_num * 4));
+    return W5500_BSB_SOCKET0_TX + (socket_num * 4);
 }
 
 static inline uint8_t W5500_GetSocketBSB_RX(uint8_t socket_num) {
-    return (socket_num == 0) ? W5500_BSB_SOCKET0_RX : (W5500_BSB_SOCKET0_RX + (socket_num * 4));
+    return W5500_BSB_SOCKET0_RX + (socket_num * 4);
 }
 
 #endif // W5500_H
