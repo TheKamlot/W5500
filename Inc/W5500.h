@@ -155,8 +155,6 @@ int16_t W5500_SocketReceiveUDP(const w5500_t* w5500, socket_t* sock, uint8_t* bu
 int16_t W5500_SocketReceiveMACRAW(const w5500_t* w5500, socket_t* sock, uint8_t* buffer,
                                 uint16_t max_len, w5500_packet_info_t* packet_info);
 
-
-
 // ============================================================================
 // FUNKCJE MONITOROWANIA STANU (podobnie jak spi_is_dma_busy itp.)
 // ============================================================================

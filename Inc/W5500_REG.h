@@ -233,13 +233,19 @@
 #define W5500_Sn_CR_RECV               0x40U    /*!< Update RX memory pointer, receive data */
 
 /* Socket Status */
-#define W5500_Sn_SR_SOCK_CLOSED        0x00U    /*!< Closed */
-#define W5500_Sn_SR_SOCK_INIT          0x13U    /*!< Initialized */
-#define W5500_Sn_SR_SOCK_LISTEN        0x14U    /*!< Listen */
-#define W5500_Sn_SR_SOCK_ESTABLISHED   0x17U    /*!< Success to connect */
-#define W5500_Sn_SR_SOCK_CLOSE_WAIT    0x1CU    /*!< Closing state */
-#define W5500_Sn_SR_SOCK_UDP           0x22U    /*!< UDP socket */
-#define W5500_Sn_SR_SOCK_MACRAW        0x42U    /*!< MAC raw mode socket */
+#define W5500_Sn_SR_SOCK_CLOSED        0x00U   // Closed
+#define W5500_Sn_SR_SOCK_INIT          0x13U   // Initialized
+#define W5500_Sn_SR_SOCK_LISTEN        0x14U   // Listen
+#define W5500_Sn_SR_SOCK_SYNSENT       0x15U   // SYN sent (BRAKOWAŁO!)
+#define W5500_Sn_SR_SOCK_SYNRECV       0x16U   // SYN received (BRAKOWAŁO!)
+#define W5500_Sn_SR_SOCK_ESTABLISHED   0x17U   // Success to connect
+#define W5500_Sn_SR_SOCK_FINWAIT       0x18U   // Closing state (BRAKOWAŁO!)
+#define W5500_Sn_SR_SOCK_CLOSING       0x1AU   // Closing state (BRAKOWAŁO!)
+#define W5500_Sn_SR_SOCK_TIMEWAIT      0x1BU   // Time wait (BRAKOWAŁO!)
+#define W5500_Sn_SR_SOCK_CLOSEWAIT     0x1CU   // Close wait
+#define W5500_Sn_SR_SOCK_LASTACK       0x1DU   // Last ACK (BRAKOWAŁO!)
+#define W5500_Sn_SR_SOCK_UDP           0x22U   // UDP socket
+#define W5500_Sn_SR_SOCK_MACRAW        0x42U   // MAC raw mode socket
 
 /* SPI Control */
 #define W5500_SPI_BSB_Pos               3U

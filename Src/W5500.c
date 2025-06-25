@@ -201,6 +201,375 @@ void W5500_InitPeripheral(w5500_t* w5500){
     w5500->is_initialized = true;
 }
 
+void W5500_Reset(const w5500_t* w5500){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi) {
+        return;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return;
+    }
+
+    // UWAGA: Ta funkcja wymaga dodania pinu RSTn do konfiguracji SPI
+    // Na razie używamy software reset jako fallback
+
+    // Hardware reset przez pin RSTn (jeśli dostępny)
+    // GPIO_ResetBits(RST_PORT, RST_PIN);  // RSTn = LOW
+    // Delay minimum 500µs (zgodnie z datasheetem)
+    // for (volatile uint32_t i = 0; i < 50000; i++);  // ~500µs przy 100MHz
+    // GPIO_SetBits(RST_PORT, RST_PIN);    // RSTn = HIGH
+
+    // Fallback: Software reset
+    W5500_SoftReset(w5500);
+
+    // Oczekiwanie na PLL Lock (datasheet: max 1ms)
+    for (volatile uint32_t i = 0; i < 100000; i++);
+
+    // Sprawdzenie czy układ odpowiada
+    uint8_t version;
+    W5500_ReadReg(w5500, W5500_VERSIONR, W5500_BSB_COMMON_REG, &version, 1);
+
+    // Opcjonalnie: sprawdź czy version == 0x04
+}
+
+void W5500_SoftReset(const w5500_t* w5500){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi) {
+        return;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return;
+    }
+
+    // 1. Ustawienie bitu RST w rejestrze MR (zgodnie z datasheetem)
+    uint8_t reset_value = W5500_MR_RST;
+    W5500_WriteReg(w5500, W5500_MR, W5500_BSB_COMMON_REG, &reset_value, 1);
+
+    // 2. Oczekiwanie na automatyczne wyczyszczenie bitu RST
+    // Datasheet: "It will be automatically cleared as 0 after SW reset"
+    uint8_t mode_reg;
+    uint32_t timeout = 1000000; // Timeout counter
+
+    do {
+        W5500_ReadReg(w5500, W5500_MR, W5500_BSB_COMMON_REG, &mode_reg, 1);
+        timeout--;
+    } while ((mode_reg & W5500_MR_RST) && timeout > 0);
+
+    // 3. Sprawdzenie czy reset się zakończył
+    if (timeout == 0) {
+        // Reset nie zakończył się poprawnie - można dodać obsługę błędu
+        return;
+    }
+
+    // 4. Krótkie opóźnienie dla stabilizacji układu
+    for (volatile uint32_t i = 0; i < 10000; i++);
+
+    // 5. Opcjonalne sprawdzenie wersji układu po reset
+    uint8_t version;
+    W5500_ReadReg(w5500, W5500_VERSIONR, W5500_BSB_COMMON_REG, &version, 1);
+
+    // Sprawdź czy version == 0x04 (zgodnie z datasheetem)
+    if (version != 0x04) {
+        // Nieprawidłowa wersja po reset - można dodać obsługę błędu
+    }
+}
+
+void W5500_SocketUpdateStatus(const w5500_t* w5500, socket_t* sock){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi || !sock) {
+        return;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return;
+    }
+
+    uint8_t bsb = W5500_GetSocketBSB_REG(sock->socket_num);
+
+    // 1. Odczytaj aktualny status socketu
+    W5500_ReadReg(w5500, W5500_Sn_SR, bsb, &sock->status, 1);
+
+    // 2. Aktualizuj flagę is_connected na podstawie statusu
+    if (sock->protocol == W5500_Sn_MR_PROTOCOL_TCP) {
+        sock->flags.is_connected = (sock->status == W5500_Sn_SR_SOCK_ESTABLISHED);
+    } else {
+        // UDP i MACRAW nie mają połączenia
+        sock->flags.is_connected = false;
+    }
+
+    // 3. Sprawdź czy socket jest otwarty
+    sock->flags.is_open = (sock->status != W5500_Sn_SR_SOCK_CLOSED);
+
+    // 4. Sprawdź czy są dane w buforze RX
+    uint8_t rx_size_bytes[2];
+    W5500_ReadReg(w5500, W5500_Sn_RXRSR0, bsb, rx_size_bytes, 2);
+    uint16_t rx_data_size = (rx_size_bytes[0] << 8) | rx_size_bytes[1];
+
+    sock->flags.has_data = (rx_data_size > 0);
+}
+
+void W5500_SetNetworkConfig(w5500_t* w5500, const w5500_network_config_t* config){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi || !config) {
+        return;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return;
+    }
+
+    // 1. Zapisz MAC Address (6 oddzielnych rejestrów)
+    for (int i = 0; i < 6; i++) {
+        W5500_WriteReg(w5500, W5500_SHAR0 + i, W5500_BSB_COMMON_REG,
+                      &config->mac[i], 1);
+    }
+
+    // 2. Zapisz IP Address (4 rejestry)
+    W5500_WriteIPAddress(w5500, W5500_SIPR0, W5500_BSB_COMMON_REG, config->ip);
+
+    // 3. Zapisz Subnet Mask (4 rejestry)
+    W5500_WriteIPAddress(w5500, W5500_SUBR0, W5500_BSB_COMMON_REG, config->subnet);
+
+    // 4. Zapisz Gateway Address (4 rejestry)
+    W5500_WriteIPAddress(w5500, W5500_GAR0, W5500_BSB_COMMON_REG, config->gateway);
+
+    // 5. Aktualizuj cache w strukturze
+    memcpy(&w5500->network, config, sizeof(w5500_network_config_t));
+}
+
+void W5500_GetNetworkConfig(const w5500_t* w5500, w5500_network_config_t* config){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi || !config) {
+        return;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return;
+    }
+
+    // 1. Odczytaj MAC Address (6 oddzielnych rejestrów)
+    for (int i = 0; i < 6; i++) {
+        W5500_ReadReg(w5500, W5500_SHAR0 + i, W5500_BSB_COMMON_REG,
+                     &config->mac[i], 1);
+    }
+
+    // 2. Odczytaj IP Address (4 rejestry)
+    W5500_ReadIPAddress(w5500, W5500_SIPR0, W5500_BSB_COMMON_REG, config->ip);
+
+    // 3. Odczytaj Subnet Mask (4 rejestry)
+    W5500_ReadIPAddress(w5500, W5500_SUBR0, W5500_BSB_COMMON_REG, config->subnet);
+
+    // 4. Odczytaj Gateway Address (4 rejestry)
+    W5500_ReadIPAddress(w5500, W5500_GAR0, W5500_BSB_COMMON_REG, config->gateway);
+
+    // 5. Odczytaj PHY mode z rejestru PHYCFGR
+    uint8_t phy_reg;
+    W5500_ReadReg(w5500, W5500_PHYCFGR, W5500_BSB_COMMON_REG, &phy_reg, 1);
+    config->phy_mode = (phy_reg & W5500_PHYCFGR_OPMDC) >> W5500_PHYCFGR_OPMDC_Pos;
+}
+
+void W5500_SetPHYConfig(const w5500_t* w5500, uint8_t mode){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi || mode > 7) {
+        return;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return;
+    }
+
+    // Konfiguracja PHY zgodnie z datasheetem (strona 42)
+    // Sequence: OPMD=1, OPMDC=mode, RST=0, RST=1
+
+    // 1. Ustaw OPMD=1 i OPMDC=mode
+    uint8_t phy_config = W5500_PHYCFGR_OPMD | (mode << W5500_PHYCFGR_OPMDC_Pos);
+    W5500_WriteReg(w5500, W5500_PHYCFGR, W5500_BSB_COMMON_REG, &phy_config, 1);
+
+    // 2. PHY Reset (RST=0)
+    phy_config &= ~W5500_PHYCFGR_RST;
+    W5500_WriteReg(w5500, W5500_PHYCFGR, W5500_BSB_COMMON_REG, &phy_config, 1);
+
+    // 3. Krótkie opóźnienie dla PHY reset
+    for (volatile uint32_t i = 0; i < 100000; i++);
+
+    // 4. PHY Reset zakończenie (RST=1)
+    phy_config |= W5500_PHYCFGR_RST;
+    W5500_WriteReg(w5500, W5500_PHYCFGR, W5500_BSB_COMMON_REG, &phy_config, 1);
+
+    // 5. Oczekiwanie na ustabilizowanie się PHY
+    uint32_t timeout = 1000000;
+    do {
+        W5500_ReadReg(w5500, W5500_PHYCFGR, W5500_BSB_COMMON_REG, &phy_config, 1);
+        timeout--;
+    } while (!(phy_config & W5500_PHYCFGR_LNK) && timeout > 0);
+}
+
+uint8_t W5500_GetPHYConfig(const w5500_t* w5500){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi) {
+        return 0;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return 0;
+    }
+
+    // Odczytaj rejestr PHYCFGR
+    uint8_t phy_reg;
+    W5500_ReadReg(w5500, W5500_PHYCFGR, W5500_BSB_COMMON_REG, &phy_reg, 1);
+
+    // Wyciągnij OPMDC[5:3]
+    return (phy_reg & W5500_PHYCFGR_OPMDC) >> W5500_PHYCFGR_OPMDC_Pos;
+}
+
+bool W5500_IsLinkUp(const w5500_t* w5500){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi) {
+        return false;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return false;
+    }
+
+    // Odczytaj rejestr PHYCFGR
+    uint8_t phy_reg;
+    W5500_ReadReg(w5500, W5500_PHYCFGR, W5500_BSB_COMMON_REG, &phy_reg, 1);
+
+    // Sprawdź bit LNK[0]
+    return (phy_reg & W5500_PHYCFGR_LNK) ? true : false;
+}
+
+void W5500_UpdateStatus(w5500_t* w5500){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi) {
+        return;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return;
+    }
+
+    // 1. Aktualizuj status PHY i łącza
+    uint8_t phy_reg;
+    W5500_ReadReg(w5500, W5500_PHYCFGR, W5500_BSB_COMMON_REG, &phy_reg, 1);
+    w5500->phy_link_up = (phy_reg & W5500_PHYCFGR_LNK) ? true : false;
+
+    // 2. Aktualizuj status wszystkich socketów
+    for (int i = 0; i < W5500_MAX_SOCKETS; i++) {
+        W5500_SocketUpdateStatus(w5500, &w5500->sockets[i]);
+    }
+
+    // 3. Policz aktywne sockety
+    w5500->active_sockets = 0;
+    for (int i = 0; i < W5500_MAX_SOCKETS; i++) {
+        if (w5500->sockets[i].flags.is_open) {
+            w5500->active_sockets++;
+        }
+    }
+}
+
+uint16_t W5500_SocketGetTxFreeSize(const w5500_t* w5500, const socket_t* sock){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi || !sock) {
+        return 0;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return 0;
+    }
+
+    uint8_t bsb = W5500_GetSocketBSB_REG(sock->socket_num);
+
+    // Odczytaj TX Free Size (16-bit register)
+    uint8_t tx_free_bytes[2];
+    W5500_ReadReg(w5500, W5500_Sn_TXFSR0, bsb, tx_free_bytes, 2);
+
+    // Konwersja z big-endian do little-endian
+    return (tx_free_bytes[0] << 8) | tx_free_bytes[1];
+}
+
+uint16_t W5500_SocketGetRxDataSize(const w5500_t* w5500, const socket_t* sock){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi || !sock) {
+        return 0;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return 0;
+    }
+
+    uint8_t bsb = W5500_GetSocketBSB_REG(sock->socket_num);
+
+    // Odczytaj RX Received Size (16-bit register)
+    uint8_t rx_size_bytes[2];
+    W5500_ReadReg(w5500, W5500_Sn_RXRSR0, bsb, rx_size_bytes, 2);
+
+    // Konwersja z big-endian do little-endian
+    return (rx_size_bytes[0] << 8) | rx_size_bytes[1];
+}
+
+bool W5500_SocketHasData(const w5500_t* w5500, const socket_t* sock){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi || !sock) {
+        return false;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return false;
+    }
+
+    // Sprawdź flagę cache (szybkie sprawdzenie)
+    if (sock->flags.has_data) {
+        return true;
+    }
+
+    // Bezpośrednie sprawdzenie rejestru (dla pewności)
+    uint16_t rx_data_size = W5500_SocketGetRxDataSize(w5500, sock);
+    return (rx_data_size > 0);
+}
+
+bool W5500_SocketCanSend(const w5500_t* w5500, const socket_t* sock, uint16_t size){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi || !sock || size == 0) {
+        return false;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return false;
+    }
+
+    // Sprawdzenie czy socket jest otwarty
+    if (!sock->flags.is_open) {
+        return false;
+    }
+
+    // Dla TCP sprawdź czy jest połączony
+    if (sock->protocol == W5500_Sn_MR_PROTOCOL_TCP && !sock->flags.is_connected) {
+        return false;
+    }
+
+    // Sprawdź wolne miejsce w TX buffer
+    uint16_t tx_free_size = W5500_SocketGetTxFreeSize(w5500, sock);
+
+    return (size <= tx_free_size);
+}
+
 int8_t W5500_SocketInit(socket_t* sock, uint8_t socket_num, uint8_t protocol, uint16_t port){
     // Walidacja parametrów (podobnie jak w spi_init_config)
     if (!sock || socket_num >= W5500_MAX_SOCKETS) {
@@ -354,6 +723,174 @@ int8_t W5500_SocketClose(const w5500_t* w5500, socket_t* sock){
     return W5500_OK;
 }
 
+int8_t W5500_SocketListen(const w5500_t* w5500, socket_t* sock){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi || !sock) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdzenie czy socket jest otwarty i to TCP
+    if (!sock->flags.is_open || sock->protocol != W5500_Sn_MR_PROTOCOL_TCP) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdzenie czy socket jest w stanie INIT
+    if (sock->status != W5500_Sn_SR_SOCK_INIT) {
+        return W5500_ERROR;
+    }
+
+    uint8_t bsb = W5500_GetSocketBSB_REG(sock->socket_num);
+
+    // 1. Wyślij komendę LISTEN
+    uint8_t command = W5500_Sn_CR_LISTEN;
+    W5500_WriteReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+
+    // 2. Czekaj na zakończenie komendy
+    uint32_t timeout = 100000;
+    do {
+        W5500_ReadReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+        timeout--;
+    } while (command != 0x00 && timeout > 0);
+
+    if (timeout == 0) {
+        return W5500_TIMEOUT;
+    }
+
+    // 3. Sprawdź status socketu
+    W5500_ReadReg(w5500, W5500_Sn_SR, bsb, &sock->status, 1);
+
+    // 4. Sprawdź czy socket przeszedł w stan LISTEN
+    if (sock->status == W5500_Sn_SR_SOCK_LISTEN) {
+        return W5500_OK;
+    }
+
+    return W5500_ERROR;
+}
+
+int8_t W5500_SocketConnect(const w5500_t* w5500, socket_t* sock, const uint8_t* dest_ip, uint16_t dest_port){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi || !sock || !dest_ip) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdzenie czy socket jest otwarty i to TCP
+    if (!sock->flags.is_open || sock->protocol != W5500_Sn_MR_PROTOCOL_TCP) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdzenie czy socket jest w stanie INIT
+    if (sock->status != W5500_Sn_SR_SOCK_INIT) {
+        return W5500_ERROR;
+    }
+
+    uint8_t bsb = W5500_GetSocketBSB_REG(sock->socket_num);
+
+    // 1. Ustaw adres docelowy IP
+    W5500_WriteIPAddress(w5500, W5500_Sn_DIPR0, bsb, dest_ip);
+
+    // 2. Ustaw port docelowy
+    uint8_t port_bytes[2] = {(uint8_t)(dest_port >> 8), (uint8_t)(dest_port & 0xFF)};
+    W5500_WriteReg(w5500, W5500_Sn_DPORT0, bsb, port_bytes, 2);
+
+    // 3. Wyślij komendę CONNECT
+    uint8_t command = W5500_Sn_CR_CONNECT;
+    W5500_WriteReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+
+    // 4. Czekaj na zakończenie komendy
+    uint32_t timeout = 100000;
+    do {
+        W5500_ReadReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+        timeout--;
+    } while (command != 0x00 && timeout > 0);
+
+    if (timeout == 0) {
+        return W5500_TIMEOUT;
+    }
+
+    // 5. Sprawdź status socketu
+    W5500_ReadReg(w5500, W5500_Sn_SR, bsb, &sock->status, 1);
+
+    // 6. Sprawdź czy połączenie zostało nawiązane
+    if (sock->status == W5500_Sn_SR_SOCK_ESTABLISHED) {
+        // Zaktualizuj cache adresu docelowego w socket_t
+        memcpy(sock->dest_ip, dest_ip, 4);
+        sock->dest_port = dest_port;
+        sock->flags.is_connected = true;
+        return W5500_OK;
+    }
+
+    // Sprawdź czy socket jest w stanie przejściowym
+    if (sock->status == W5500_Sn_SR_SOCK_SYNSENT) {
+        return W5500_BUSY; // Połączenie w toku
+    }
+
+    return W5500_ERROR;
+}
+
+int8_t W5500_SocketDisconnect(const w5500_t* w5500, socket_t* sock){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi || !sock) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdzenie czy socket jest otwarty, to TCP i połączony
+    if (!sock->flags.is_open || sock->protocol != W5500_Sn_MR_PROTOCOL_TCP || !sock->flags.is_connected) {
+        return W5500_ERROR;
+    }
+
+    uint8_t bsb = W5500_GetSocketBSB_REG(sock->socket_num);
+
+    // 1. Wyślij komendę DISCON (graceful disconnect)
+    uint8_t command = W5500_Sn_CR_DISCON;
+    W5500_WriteReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+
+    // 2. Czekaj na zakończenie komendy
+    uint32_t timeout = 100000;
+    do {
+        W5500_ReadReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+        timeout--;
+    } while (command != 0x00 && timeout > 0);
+
+    if (timeout == 0) {
+        return W5500_TIMEOUT;
+    }
+
+    // 3. Sprawdź status socketu
+    W5500_ReadReg(w5500, W5500_Sn_SR, bsb, &sock->status, 1);
+
+    // 4. Aktualizuj flagi socketu
+    sock->flags.is_connected = false;
+    sock->flags.has_data = false;
+
+    // Wyzeruj cache adresu docelowego
+    memset(sock->dest_ip, 0, 4);
+    sock->dest_port = 0;
+
+    // 5. Sprawdź czy socket został rozłączony
+    if (sock->status == W5500_Sn_SR_SOCK_CLOSED) {
+        sock->flags.is_open = false;
+        return W5500_OK;
+    }
+
+    // Socket może być w stanie przejściowym (FIN_WAIT, CLOSING, etc.)
+    return W5500_OK;
+}
+
 void W5500_WriteBuffer(const w5500_t* w5500, uint16_t addr, uint8_t bsb, const uint8_t* data, uint16_t len){
     // Walidacja parametrów
     if (!w5500 || !w5500->spi || !data || len == 0) {
@@ -437,6 +974,213 @@ void W5500_ReadBuffer(const w5500_t* w5500, uint16_t addr, uint8_t bsb, uint8_t*
     }
 
     // CS już zdeaktywowany przez DMA
+}
+
+int16_t W5500_SocketSend(const w5500_t* w5500, socket_t* sock, const uint8_t* data, uint16_t len){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi || !sock || !data || len == 0) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdzenie czy socket jest otwarty
+    if (!sock->flags.is_open) {
+        return W5500_ERROR;
+    }
+
+    // TCP - sprawdź połączenie
+    if (sock->protocol == W5500_Sn_MR_PROTOCOL_TCP && !sock->flags.is_connected) {
+        return W5500_ERROR;
+    }
+
+    uint8_t bsb = W5500_GetSocketBSB_REG(sock->socket_num);
+
+    // 1. Sprawdź wolne miejsce w TX buffer
+    uint8_t tx_free_bytes[2];
+    W5500_ReadReg(w5500, W5500_Sn_TXFSR0, bsb, tx_free_bytes, 2);
+    uint16_t tx_free_size = (tx_free_bytes[0] << 8) | tx_free_bytes[1];
+
+    if (len > tx_free_size) {
+        return W5500_BUFFER_FULL;
+    }
+
+    // 2. Pobierz TX Write Pointer
+    uint8_t tx_wr_bytes[2];
+    W5500_ReadReg(w5500, W5500_Sn_TXWR0, bsb, tx_wr_bytes, 2);
+    uint16_t tx_wr_ptr = (tx_wr_bytes[0] << 8) | tx_wr_bytes[1];
+
+    // 3. Zapisz dane do TX buffer
+    uint8_t tx_bsb = W5500_GetSocketBSB_TX(sock->socket_num);
+    W5500_WriteBuffer(w5500, tx_wr_ptr, tx_bsb, data, len);
+
+    // 4. Aktualizuj TX Write Pointer
+    tx_wr_ptr += len;
+    tx_wr_bytes[0] = (uint8_t)(tx_wr_ptr >> 8);
+    tx_wr_bytes[1] = (uint8_t)(tx_wr_ptr & 0xFF);
+    W5500_WriteReg(w5500, W5500_Sn_TXWR0, bsb, tx_wr_bytes, 2);
+
+    // 5. Wyślij komendą SEND
+    uint8_t command = W5500_Sn_CR_SEND;
+    W5500_WriteReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+
+    // 6. Czekaj na zakończenie komendy (opcjonalnie)
+    uint32_t timeout = 100000;
+    do {
+        W5500_ReadReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+        timeout--;
+    } while (command != 0x00 && timeout > 0);
+
+    if (timeout == 0) {
+        return W5500_TIMEOUT;
+    }
+
+    return len;
+}
+
+int16_t W5500_SocketSendTo(const w5500_t* w5500, socket_t* sock, const uint8_t* data, uint16_t len,
+                          const uint8_t* dest_ip, uint16_t dest_port){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi || !sock || !data || !dest_ip || len == 0) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdzenie czy socket jest otwarty i to UDP
+    if (!sock->flags.is_open || sock->protocol != W5500_Sn_MR_PROTOCOL_UDP) {
+        return W5500_ERROR;
+    }
+
+    uint8_t bsb = W5500_GetSocketBSB_REG(sock->socket_num);
+
+    // 1. Ustaw adres docelowy IP
+    W5500_WriteIPAddress(w5500, W5500_Sn_DIPR0, bsb, dest_ip);
+
+    // 2. Ustaw port docelowy
+    uint8_t port_bytes[2] = {(uint8_t)(dest_port >> 8), (uint8_t)(dest_port & 0xFF)};
+    W5500_WriteReg(w5500, W5500_Sn_DPORT0, bsb, port_bytes, 2);
+
+    // 3. Sprawdź wolne miejsce w TX buffer
+    uint8_t tx_free_bytes[2];
+    W5500_ReadReg(w5500, W5500_Sn_TXFSR0, bsb, tx_free_bytes, 2);
+    uint16_t tx_free_size = (tx_free_bytes[0] << 8) | tx_free_bytes[1];
+
+    if (len > tx_free_size) {
+        return W5500_BUFFER_FULL;
+    }
+
+    // 4. Pobierz TX Write Pointer
+    uint8_t tx_wr_bytes[2];
+    W5500_ReadReg(w5500, W5500_Sn_TXWR0, bsb, tx_wr_bytes, 2);
+    uint16_t tx_wr_ptr = (tx_wr_bytes[0] << 8) | tx_wr_bytes[1];
+
+    // 5. Zapisz dane do TX buffer
+    uint8_t tx_bsb = W5500_GetSocketBSB_TX(sock->socket_num);
+    W5500_WriteBuffer(w5500, tx_wr_ptr, tx_bsb, data, len);
+
+    // 6. Aktualizuj TX Write Pointer
+    tx_wr_ptr += len;
+    tx_wr_bytes[0] = (uint8_t)(tx_wr_ptr >> 8);
+    tx_wr_bytes[1] = (uint8_t)(tx_wr_ptr & 0xFF);
+    W5500_WriteReg(w5500, W5500_Sn_TXWR0, bsb, tx_wr_bytes, 2);
+
+    // 7. Wyślij komendą SEND
+    uint8_t command = W5500_Sn_CR_SEND;
+    W5500_WriteReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+
+    // 8. Czekaj na zakończenie komendy
+    uint32_t timeout = 100000;
+    do {
+        W5500_ReadReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+        timeout--;
+    } while (command != 0x00 && timeout > 0);
+
+    if (timeout == 0) {
+        return W5500_TIMEOUT;
+    }
+
+    // 9. Zaktualizuj cache adresu docelowego w socket_t
+    memcpy(sock->dest_ip, dest_ip, 4);
+    sock->dest_port = dest_port;
+
+    return len;
+}
+
+int16_t W5500_SocketSendRaw(const w5500_t* w5500, socket_t* sock, const uint8_t* data, uint16_t len){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi || !sock || !data || len == 0) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return W5500_ERROR;
+    }
+
+    // **TYLKO dla MACRAW - Socket 0**
+    if (sock->protocol != W5500_Sn_MR_PROTOCOL_MACRAW) {
+        return W5500_ERROR;
+    }
+
+    // Sprawdzenie czy socket jest otwarty
+    if (!sock->flags.is_open) {
+        return W5500_ERROR;
+    }
+
+    // **MACRAW: Walidacja rozmiaru ramki Ethernet (64-1514 bajtów)**
+    if (len < 64 || len > 1514) {
+        return W5500_ERROR;
+    }
+
+    uint8_t bsb = W5500_GetSocketBSB_REG(0); // Zawsze Socket 0
+
+    // 1. Sprawdź wolne miejsce w TX buffer
+    uint8_t tx_free_bytes[2];
+    W5500_ReadReg(w5500, W5500_Sn_TXFSR0, bsb, tx_free_bytes, 2);
+    uint16_t tx_free_size = (tx_free_bytes[0] << 8) | tx_free_bytes[1];
+
+    if (len > tx_free_size) {
+        return W5500_BUFFER_FULL;
+    }
+
+    // 2. Pobierz TX Write Pointer
+    uint8_t tx_wr_bytes[2];
+    W5500_ReadReg(w5500, W5500_Sn_TXWR0, bsb, tx_wr_bytes, 2);
+    uint16_t tx_wr_ptr = (tx_wr_bytes[0] << 8) | tx_wr_bytes[1];
+
+    // 3. Zapisz surową ramkę Ethernet do TX buffer
+    uint8_t tx_bsb = W5500_GetSocketBSB_TX(0); // Zawsze Socket 0
+    W5500_WriteBuffer(w5500, tx_wr_ptr, tx_bsb, data, len);
+
+    // 4. Aktualizuj TX Write Pointer
+    tx_wr_ptr += len;
+    tx_wr_bytes[0] = (uint8_t)(tx_wr_ptr >> 8);
+    tx_wr_bytes[1] = (uint8_t)(tx_wr_ptr & 0xFF);
+    W5500_WriteReg(w5500, W5500_Sn_TXWR0, bsb, tx_wr_bytes, 2);
+
+    // 5. Wyślij komendą SEND
+    uint8_t command = W5500_Sn_CR_SEND;
+    W5500_WriteReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+
+    // 6. Czekaj na zakończenie komendy
+    uint32_t timeout = 100000;
+    do {
+        W5500_ReadReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+        timeout--;
+    } while (command != 0x00 && timeout > 0);
+
+    if (timeout == 0) {
+        return W5500_TIMEOUT;
+    }
+
+    return len;
 }
 
 int16_t W5500_SocketReceiveTCP(const w5500_t* w5500, socket_t* sock,
@@ -667,6 +1411,75 @@ int16_t W5500_SocketReceiveMACRAW(const w5500_t* w5500, socket_t* sock, uint8_t*
 
     return frame_length;
 }
+
+uint8_t W5500_GetVersion(const w5500_t* w5500){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi) {
+        return 0x00;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return 0x00;
+    }
+
+    // Odczytaj wersję układu z rejestru VERSIONR
+    uint8_t version;
+    W5500_ReadReg(w5500, W5500_VERSIONR, W5500_BSB_COMMON_REG, &version, 1);
+
+    return version;
+}
+
+bool W5500_SelfTest(const w5500_t* w5500){
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi) {
+        return false;
+    }
+
+    // Sprawdzenie czy SPI jest skonfigurowane
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
+        return false;
+    }
+
+    // 1. Test wersji układu (powinna być 0x04)
+    uint8_t version = W5500_GetVersion(w5500);
+    if (version != 0x04) {
+        return false;
+    }
+
+    // 2. Test zapisu/odczytu rejestru (używamy RTR jako test register)
+    uint8_t original_rtr[2];
+    W5500_ReadReg(w5500, W5500_RTR0, W5500_BSB_COMMON_REG, original_rtr, 2);
+
+    // Zapisz wartość testową
+    uint8_t test_value[2] = {0xAA, 0x55};
+    W5500_WriteReg(w5500, W5500_RTR0, W5500_BSB_COMMON_REG, test_value, 2);
+
+    // Odczytaj i sprawdź
+    uint8_t read_value[2];
+    W5500_ReadReg(w5500, W5500_RTR0, W5500_BSB_COMMON_REG, read_value, 2);
+
+    bool write_test_ok = (read_value[0] == test_value[0] && read_value[1] == test_value[1]);
+
+    // Przywróć oryginalną wartość
+    W5500_WriteReg(w5500, W5500_RTR0, W5500_BSB_COMMON_REG, original_rtr, 2);
+
+    if (!write_test_ok) {
+        return false;
+    }
+
+    // 3. Test rejestru PHY (sprawdź czy można odczytać)
+    uint8_t phy_reg;
+    W5500_ReadReg(w5500, W5500_PHYCFGR, W5500_BSB_COMMON_REG, &phy_reg, 1);
+
+    // PHY register powinien mieć sensowne wartości (bity 7-0 nie mogą być wszystkie 0 lub 1)
+    if (phy_reg == 0x00 || phy_reg == 0xFF) {
+        return false;
+    }
+
+    return true;
+}
+
 
 
 void W5500_WriteReg(const w5500_t* w5500, uint16_t addr, uint8_t bsb, const void* data, uint8_t size){
