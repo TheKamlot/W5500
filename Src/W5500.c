@@ -225,7 +225,7 @@ void W5500_Reset(const w5500_t* w5500){
     W5500_SoftReset(w5500);
 
     // Oczekiwanie na PLL Lock (datasheet: max 1ms)
-    for (volatile uint32_t i = 0; i < 100000; i++);
+    for (volatile uint32_t i = 0; i < 100000; i++){};
 
     // Sprawdzenie czy układ odpowiada
     uint8_t version;
@@ -266,7 +266,7 @@ void W5500_SoftReset(const w5500_t* w5500){
     }
 
     // 4. Krótkie opóźnienie dla stabilizacji układu
-    for (volatile uint32_t i = 0; i < 10000; i++);
+    for (volatile uint32_t i = 0; i < 10000; i++){};
 
     // 5. Opcjonalne sprawdzenie wersji układu po reset
     uint8_t version;
@@ -398,7 +398,7 @@ void W5500_SetPHYConfig(const w5500_t* w5500, uint8_t mode){
     W5500_WriteReg(w5500, W5500_PHYCFGR, W5500_BSB_COMMON_REG, &phy_config, 1);
 
     // 3. Krótkie opóźnienie dla PHY reset
-    for (volatile uint32_t i = 0; i < 100000; i++);
+    for (volatile uint32_t i = 0; i < 100000; i++){};
 
     // 4. PHY Reset zakończenie (RST=1)
     phy_config |= W5500_PHYCFGR_RST;
