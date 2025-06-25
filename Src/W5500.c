@@ -104,15 +104,83 @@ void W5500_InitConfig(w5500_t* w5500, const spi_t* spi, const w5500_network_conf
 }
 
 void W5500_InitPeripheral(w5500_t* w5500){
-    // Walidacja parametrów (podobnie jak w spi_init_peripheral)
-    if (!w5500 || !w5500->spi) {
-        return;
-    }
+    // Walidacja parametrów
+    if (!w5500 || !w5500->spi) return;
 
     // Sprawdzenie czy SPI jest skonfigurowane
-    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
-        return;
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) return;
+
+    // Inicjalizacja pinu RST jeśli skonfigurowany
+    if (w5500->RSTPort) {
+        // Włączenie zegara dla portu RST
+        if (w5500->RSTPort == GPIOA) RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+        else if (w5500->RSTPort == GPIOB) RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
+        else if (w5500->RSTPort == GPIOC) RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
+        else if (w5500->RSTPort == GPIOD) RCC->AHB1ENR |= RCC_AHB1ENR_GPIODEN;
+
+        // Konfiguracja pinu RST jako wyjście
+        w5500->RSTPort->MODER &= ~(0x3U << (w5500->RSTPin * 2));
+        w5500->RSTPort->MODER |= (0x1U << (w5500->RSTPin * 2)); // Output
+        w5500->RSTPort->OTYPER &= ~(1U << w5500->RSTPin); // Push-pull
+        w5500->RSTPort->OSPEEDR |= (0x3U << (w5500->RSTPin * 2)); // High speed
+        w5500->RSTPort->PUPDR &= ~(0x3U << (w5500->RSTPin * 2)); // No pull
+
+        // Ustawienie domyślnego stanu HIGH (nieaktywny reset)
+        w5500->RSTPort->BSRR = (1U << w5500->RSTPin);
     }
+
+    // Inicjalizacja pinu INT jeśli skonfigurowany
+    if (w5500->INTPort && w5500->enableInterrupts) {
+        // Włączenie zegara dla portu INT
+        if (w5500->INTPort == GPIOA) RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+        else if (w5500->INTPort == GPIOB) RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
+        else if (w5500->INTPort == GPIOC) RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
+        else if (w5500->INTPort == GPIOD) RCC->AHB1ENR |= RCC_AHB1ENR_GPIODEN;
+
+        // Konfiguracja pinu INT jako wejście
+        w5500->INTPort->MODER &= ~(0x3U << (w5500->INTPin * 2)); // Input
+        w5500->INTPort->PUPDR &= ~(0x3U << (w5500->INTPin * 2));
+        w5500->INTPort->PUPDR |= (0x1U << (w5500->INTPin * 2)); // Pull-up
+
+        // Konfiguracja EXTI bezpośrednio tutaj
+        // Włączenie zegara SYSCFG
+        RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
+
+        uint8_t pin = w5500->INTPin;
+        uint8_t port_source = 0;
+
+        if (w5500->INTPort == GPIOA) port_source = 0;
+        else if (w5500->INTPort == GPIOB) port_source = 1;
+        else if (w5500->INTPort == GPIOC) port_source = 2;
+        else if (w5500->INTPort == GPIOD) port_source = 3;
+
+        // Konfiguracja EXTI dla wybranego pinu
+        SYSCFG->EXTICR[pin / 4] &= ~(0xF << ((pin % 4) * 4));
+        SYSCFG->EXTICR[pin / 4] |= (port_source << ((pin % 4) * 4));
+
+        // Włączenie przerwania na zbocze opadające (INT active low)
+        EXTI->FTSR |= (1U << pin);
+        EXTI->RTSR &= ~(1U << pin);
+
+        // Włączenie przerwania
+        EXTI->IMR |= (1U << pin);
+
+        // Konfiguracja NVIC
+        IRQn_Type exti_irq = EXTI0_IRQn;
+        if (pin >= 0 && pin <= 4) {
+            exti_irq = (IRQn_Type)(EXTI0_IRQn + pin);
+        } else if (pin >= 5 && pin <= 9) {
+            exti_irq = EXTI9_5_IRQn;
+        } else if (pin >= 10 && pin <= 15) {
+            exti_irq = EXTI15_10_IRQn;
+        }
+
+        NVIC_SetPriority(exti_irq, w5500->interruptPriority);
+        NVIC_EnableIRQ(exti_irq);
+    }
+
+    // Wykonanie hardware reset
+    W5500_Reset(w5500);
 
     // 1. Software Reset W5500 (zgodnie z datasheetem)
     uint8_t reset_value = W5500_MR_RST;
@@ -155,8 +223,7 @@ void W5500_InitPeripheral(w5500_t* w5500){
     // Gateway Address (4 rejestry)
     W5500_WriteIPAddress(w5500, W5500_GAR0, W5500_BSB_COMMON_REG, w5500->network.gateway);
 
-    // 4. Konfiguracja PHY (zgodnie z datasheetem i forum WIZnet)
-    // Sequence: OPMD=1, OPMDC=config, RST=0, RST=1
+    // 4. Konfiguracja PHY zgodnie z datasheetem
     uint8_t phy_config = W5500_PHYCFGR_OPMD | (w5500->network.phy_mode << W5500_PHYCFGR_OPMDC_Pos);
     W5500_WriteReg(w5500, W5500_PHYCFGR, W5500_BSB_COMMON_REG, &phy_config, 1);
 
@@ -164,8 +231,8 @@ void W5500_InitPeripheral(w5500_t* w5500){
     phy_config &= ~W5500_PHYCFGR_RST;
     W5500_WriteReg(w5500, W5500_PHYCFGR, W5500_BSB_COMMON_REG, &phy_config, 1);
 
-    // Krótkie opóźnienie dla PHY reset
-    for (volatile uint32_t i = 0; i < 100000; i++){};
+    // Opóźnienie dla PHY reset - przy 180MHz
+    for(volatile uint32_t i = 0; i < 180000; i++); // ~1ms
 
     // PHY Reset zakończenie (RST=1)
     phy_config |= W5500_PHYCFGR_RST;
@@ -201,37 +268,37 @@ void W5500_InitPeripheral(w5500_t* w5500){
     w5500->is_initialized = true;
 }
 
-void W5500_Reset(const w5500_t* w5500){
+void W5500_Reset(const w5500_t* w5500) {
     // Walidacja parametrów
-    if (!w5500 || !w5500->spi) {
-        return;
-    }
+    if (!w5500 || !w5500->spi) return;
 
     // Sprawdzenie czy SPI jest skonfigurowane
-    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) {
-        return;
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) return;
+
+    // Hardware reset przez pin RSTn jeśli dostępny
+    if (w5500->RSTPort) {
+        // RSTn LOW - aktywacja resetu (active low)
+        w5500->RSTPort->BSRR = (1U << (w5500->RSTPin + 16));
+
+        // Delay minimum 500µs zgodnie z datasheetem
+        // Przy 180MHz: 500µs = 90000 cykli
+        for(volatile uint32_t i = 0; i < 90000; i++);
+
+        // RSTn HIGH - zakończenie resetu
+        w5500->RSTPort->BSRR = (1U << w5500->RSTPin);
+
+        // Oczekiwanie na PLL Lock (datasheet: max 1ms)
+        // Przy 180MHz: 1ms = 180000 cykli
+        for(volatile uint32_t i = 0; i < 180000; i++);
+    } else {
+        // Fallback do software reset
+        W5500_SoftReset(w5500);
     }
-
-    // UWAGA: Ta funkcja wymaga dodania pinu RSTn do konfiguracji SPI
-    // Na razie używamy software reset jako fallback
-
-    // Hardware reset przez pin RSTn (jeśli dostępny)
-    // GPIO_ResetBits(RST_PORT, RST_PIN);  // RSTn = LOW
-    // Delay minimum 500µs (zgodnie z datasheetem)
-    // for (volatile uint32_t i = 0; i < 50000; i++);  // ~500µs przy 100MHz
-    // GPIO_SetBits(RST_PORT, RST_PIN);    // RSTn = HIGH
-
-    // Fallback: Software reset
-    W5500_SoftReset(w5500);
-
-    // Oczekiwanie na PLL Lock (datasheet: max 1ms)
-    for (volatile uint32_t i = 0; i < 100000; i++){};
 
     // Sprawdzenie czy układ odpowiada
     uint8_t version;
     W5500_ReadReg(w5500, W5500_VERSIONR, W5500_BSB_COMMON_REG, &version, 1);
-
-    // Opcjonalnie: sprawdź czy version == 0x04
+    // Opcjonalnie sprawdź czy version == 0x04
 }
 
 void W5500_SoftReset(const w5500_t* w5500){
@@ -266,7 +333,7 @@ void W5500_SoftReset(const w5500_t* w5500){
     }
 
     // 4. Krótkie opóźnienie dla stabilizacji układu
-    for (volatile uint32_t i = 0; i < 10000; i++){};
+    for (volatile uint32_t i = 0; i < 10000; i++);
 
     // 5. Opcjonalne sprawdzenie wersji układu po reset
     uint8_t version;
@@ -307,7 +374,7 @@ void W5500_SocketUpdateStatus(const w5500_t* w5500, socket_t* sock){
 
     // 4. Sprawdź czy są dane w buforze RX
     uint8_t rx_size_bytes[2];
-    W5500_ReadReg(w5500, W5500_Sn_RXRSR0, bsb, rx_size_bytes, 2);
+    W5500_ReadReg(w5500, W5500_Sn_RX_RSR0, bsb, rx_size_bytes, 2);
     uint16_t rx_data_size = (rx_size_bytes[0] << 8) | rx_size_bytes[1];
 
     sock->flags.has_data = (rx_data_size > 0);
@@ -397,8 +464,8 @@ void W5500_SetPHYConfig(const w5500_t* w5500, uint8_t mode){
     phy_config &= ~W5500_PHYCFGR_RST;
     W5500_WriteReg(w5500, W5500_PHYCFGR, W5500_BSB_COMMON_REG, &phy_config, 1);
 
-    // 3. Krótkie opóźnienie dla PHY reset
-    for (volatile uint32_t i = 0; i < 100000; i++){};
+    // 3. Opóźnienie dla PHY reset - przy 180MHz
+    for(volatile uint32_t i = 0; i < 180000; i++); // ~1ms
 
     // 4. PHY Reset zakończenie (RST=1)
     phy_config |= W5500_PHYCFGR_RST;
@@ -495,7 +562,7 @@ uint16_t W5500_SocketGetTxFreeSize(const w5500_t* w5500, const socket_t* sock){
 
     // Odczytaj TX Free Size (16-bit register)
     uint8_t tx_free_bytes[2];
-    W5500_ReadReg(w5500, W5500_Sn_TXFSR0, bsb, tx_free_bytes, 2);
+    W5500_ReadReg(w5500, W5500_Sn_TX_FSR0, bsb, tx_free_bytes, 2);
 
     // Konwersja z big-endian do little-endian
     return (tx_free_bytes[0] << 8) | tx_free_bytes[1];
@@ -516,7 +583,7 @@ uint16_t W5500_SocketGetRxDataSize(const w5500_t* w5500, const socket_t* sock){
 
     // Odczytaj RX Received Size (16-bit register)
     uint8_t rx_size_bytes[2];
-    W5500_ReadReg(w5500, W5500_Sn_RXRSR0, bsb, rx_size_bytes, 2);
+    W5500_ReadReg(w5500, W5500_Sn_RX_RSR0, bsb, rx_size_bytes, 2);
 
     // Konwersja z big-endian do little-endian
     return (rx_size_bytes[0] << 8) | rx_size_bytes[1];
@@ -1001,7 +1068,7 @@ int16_t W5500_SocketSend(const w5500_t* w5500, socket_t* sock, const uint8_t* da
 
     // 1. Sprawdź wolne miejsce w TX buffer
     uint8_t tx_free_bytes[2];
-    W5500_ReadReg(w5500, W5500_Sn_TXFSR0, bsb, tx_free_bytes, 2);
+    W5500_ReadReg(w5500, W5500_Sn_TX_FSR0, bsb, tx_free_bytes, 2);
     uint16_t tx_free_size = (tx_free_bytes[0] << 8) | tx_free_bytes[1];
 
     if (len > tx_free_size) {
@@ -1010,7 +1077,7 @@ int16_t W5500_SocketSend(const w5500_t* w5500, socket_t* sock, const uint8_t* da
 
     // 2. Pobierz TX Write Pointer
     uint8_t tx_wr_bytes[2];
-    W5500_ReadReg(w5500, W5500_Sn_TXWR0, bsb, tx_wr_bytes, 2);
+    W5500_ReadReg(w5500, W5500_Sn_TX_WR0, bsb, tx_wr_bytes, 2);
     uint16_t tx_wr_ptr = (tx_wr_bytes[0] << 8) | tx_wr_bytes[1];
 
     // 3. Zapisz dane do TX buffer
@@ -1021,7 +1088,7 @@ int16_t W5500_SocketSend(const w5500_t* w5500, socket_t* sock, const uint8_t* da
     tx_wr_ptr += len;
     tx_wr_bytes[0] = (uint8_t)(tx_wr_ptr >> 8);
     tx_wr_bytes[1] = (uint8_t)(tx_wr_ptr & 0xFF);
-    W5500_WriteReg(w5500, W5500_Sn_TXWR0, bsb, tx_wr_bytes, 2);
+    W5500_WriteReg(w5500, W5500_Sn_TX_WR0, bsb, tx_wr_bytes, 2);
 
     // 5. Wyślij komendą SEND
     uint8_t command = W5500_Sn_CR_SEND;
@@ -1069,7 +1136,7 @@ int16_t W5500_SocketSendTo(const w5500_t* w5500, socket_t* sock, const uint8_t* 
 
     // 3. Sprawdź wolne miejsce w TX buffer
     uint8_t tx_free_bytes[2];
-    W5500_ReadReg(w5500, W5500_Sn_TXFSR0, bsb, tx_free_bytes, 2);
+    W5500_ReadReg(w5500, W5500_Sn_TX_FSR0, bsb, tx_free_bytes, 2);
     uint16_t tx_free_size = (tx_free_bytes[0] << 8) | tx_free_bytes[1];
 
     if (len > tx_free_size) {
@@ -1078,7 +1145,7 @@ int16_t W5500_SocketSendTo(const w5500_t* w5500, socket_t* sock, const uint8_t* 
 
     // 4. Pobierz TX Write Pointer
     uint8_t tx_wr_bytes[2];
-    W5500_ReadReg(w5500, W5500_Sn_TXWR0, bsb, tx_wr_bytes, 2);
+    W5500_ReadReg(w5500, W5500_Sn_TX_WR0, bsb, tx_wr_bytes, 2);
     uint16_t tx_wr_ptr = (tx_wr_bytes[0] << 8) | tx_wr_bytes[1];
 
     // 5. Zapisz dane do TX buffer
@@ -1089,7 +1156,7 @@ int16_t W5500_SocketSendTo(const w5500_t* w5500, socket_t* sock, const uint8_t* 
     tx_wr_ptr += len;
     tx_wr_bytes[0] = (uint8_t)(tx_wr_ptr >> 8);
     tx_wr_bytes[1] = (uint8_t)(tx_wr_ptr & 0xFF);
-    W5500_WriteReg(w5500, W5500_Sn_TXWR0, bsb, tx_wr_bytes, 2);
+    W5500_WriteReg(w5500, W5500_Sn_TX_WR0, bsb, tx_wr_bytes, 2);
 
     // 7. Wyślij komendą SEND
     uint8_t command = W5500_Sn_CR_SEND;
@@ -1143,7 +1210,7 @@ int16_t W5500_SocketSendRaw(const w5500_t* w5500, socket_t* sock, const uint8_t*
 
     // 1. Sprawdź wolne miejsce w TX buffer
     uint8_t tx_free_bytes[2];
-    W5500_ReadReg(w5500, W5500_Sn_TXFSR0, bsb, tx_free_bytes, 2);
+    W5500_ReadReg(w5500, W5500_Sn_TX_FSR0, bsb, tx_free_bytes, 2);
     uint16_t tx_free_size = (tx_free_bytes[0] << 8) | tx_free_bytes[1];
 
     if (len > tx_free_size) {
@@ -1152,7 +1219,7 @@ int16_t W5500_SocketSendRaw(const w5500_t* w5500, socket_t* sock, const uint8_t*
 
     // 2. Pobierz TX Write Pointer
     uint8_t tx_wr_bytes[2];
-    W5500_ReadReg(w5500, W5500_Sn_TXWR0, bsb, tx_wr_bytes, 2);
+    W5500_ReadReg(w5500, W5500_Sn_TX_WR0, bsb, tx_wr_bytes, 2);
     uint16_t tx_wr_ptr = (tx_wr_bytes[0] << 8) | tx_wr_bytes[1];
 
     // 3. Zapisz surową ramkę Ethernet do TX buffer
@@ -1163,7 +1230,7 @@ int16_t W5500_SocketSendRaw(const w5500_t* w5500, socket_t* sock, const uint8_t*
     tx_wr_ptr += len;
     tx_wr_bytes[0] = (uint8_t)(tx_wr_ptr >> 8);
     tx_wr_bytes[1] = (uint8_t)(tx_wr_ptr & 0xFF);
-    W5500_WriteReg(w5500, W5500_Sn_TXWR0, bsb, tx_wr_bytes, 2);
+    W5500_WriteReg(w5500, W5500_Sn_TX_WR0, bsb, tx_wr_bytes, 2);
 
     // 5. Wyślij komendą SEND
     uint8_t command = W5500_Sn_CR_SEND;
@@ -1204,7 +1271,7 @@ int16_t W5500_SocketReceiveTCP(const w5500_t* w5500, socket_t* sock,
 
     // Sprawdź ile danych jest dostępnych
     uint8_t rx_size_bytes[2];
-    W5500_ReadReg(w5500, W5500_Sn_RXRSR0, bsb, rx_size_bytes, 2);
+    W5500_ReadReg(w5500, W5500_Sn_RX_RSR0, bsb, rx_size_bytes, 2);
     uint16_t available_data = (rx_size_bytes[0] << 8) | rx_size_bytes[1];
 
     if (available_data == 0) {
@@ -1216,7 +1283,7 @@ int16_t W5500_SocketReceiveTCP(const w5500_t* w5500, socket_t* sock,
 
     // Pobierz RX Read Pointer
     uint8_t rx_rd_bytes[2];
-    W5500_ReadReg(w5500, W5500_Sn_RXRD0, bsb, rx_rd_bytes, 2);
+    W5500_ReadReg(w5500, W5500_Sn_RX_RD0, bsb, rx_rd_bytes, 2);
     uint16_t rx_rd_ptr = (rx_rd_bytes[0] << 8) | rx_rd_bytes[1];
 
     // Odczytaj dane przez DMA
@@ -1227,7 +1294,7 @@ int16_t W5500_SocketReceiveTCP(const w5500_t* w5500, socket_t* sock,
     rx_rd_ptr += to_read;
     rx_rd_bytes[0] = (uint8_t)(rx_rd_ptr >> 8);
     rx_rd_bytes[1] = (uint8_t)(rx_rd_ptr & 0xFF);
-    W5500_WriteReg(w5500, W5500_Sn_RXRD0, bsb, rx_rd_bytes, 2);
+    W5500_WriteReg(w5500, W5500_Sn_RX_RD0, bsb, rx_rd_bytes, 2);
 
     // Potwierdź odczyt
     uint8_t command = W5500_Sn_CR_RECV;
@@ -1252,7 +1319,7 @@ int16_t W5500_SocketReceiveUDP(const w5500_t* w5500, socket_t* sock, uint8_t* bu
 
     // Sprawdź ile danych jest dostępnych
     uint8_t rx_size_bytes[2];
-    W5500_ReadReg(w5500, W5500_Sn_RXRSR0, bsb, rx_size_bytes, 2);
+    W5500_ReadReg(w5500, W5500_Sn_RX_RSR0, bsb, rx_size_bytes, 2);
     uint16_t available_data = (rx_size_bytes[0] << 8) | rx_size_bytes[1];
 
     if (available_data < 8) {
@@ -1261,7 +1328,7 @@ int16_t W5500_SocketReceiveUDP(const w5500_t* w5500, socket_t* sock, uint8_t* bu
 
     // Pobierz RX Read Pointer
     uint8_t rx_rd_bytes[2];
-    W5500_ReadReg(w5500, W5500_Sn_RXRD0, bsb, rx_rd_bytes, 2);
+    W5500_ReadReg(w5500, W5500_Sn_RX_RD0, bsb, rx_rd_bytes, 2);
     uint16_t rx_rd_ptr = (rx_rd_bytes[0] << 8) | rx_rd_bytes[1];
 
     // **ETAP 1: Odczytaj nagłówek UDP (8 bajtów)**
@@ -1314,7 +1381,7 @@ int16_t W5500_SocketReceiveUDP(const w5500_t* w5500, socket_t* sock, uint8_t* bu
     rx_rd_ptr += 8 + packet_length;
     rx_rd_bytes[0] = (uint8_t)(rx_rd_ptr >> 8);
     rx_rd_bytes[1] = (uint8_t)(rx_rd_ptr & 0xFF);
-    W5500_WriteReg(w5500, W5500_Sn_RXRD0, bsb, rx_rd_bytes, 2);
+    W5500_WriteReg(w5500, W5500_Sn_RX_RD0, bsb, rx_rd_bytes, 2);
 
     // Potwierdź odczyt
     uint8_t command = W5500_Sn_CR_RECV;
@@ -1339,7 +1406,7 @@ int16_t W5500_SocketReceiveMACRAW(const w5500_t* w5500, socket_t* sock, uint8_t*
 
     // Sprawdź ile danych jest dostępnych
     uint8_t rx_size_bytes[2];
-    W5500_ReadReg(w5500, W5500_Sn_RXRSR0, bsb, rx_size_bytes, 2);
+    W5500_ReadReg(w5500, W5500_Sn_RX_RSR0, bsb, rx_size_bytes, 2);
     uint16_t available_data = (rx_size_bytes[0] << 8) | rx_size_bytes[1];
 
     if (available_data < 2) {
@@ -1348,7 +1415,7 @@ int16_t W5500_SocketReceiveMACRAW(const w5500_t* w5500, socket_t* sock, uint8_t*
 
     // Pobierz RX Read Pointer
     uint8_t rx_rd_bytes[2];
-    W5500_ReadReg(w5500, W5500_Sn_RXRD0, bsb, rx_rd_bytes, 2);
+    W5500_ReadReg(w5500, W5500_Sn_RX_RD0, bsb, rx_rd_bytes, 2);
     uint16_t rx_rd_ptr = (rx_rd_bytes[0] << 8) | rx_rd_bytes[1];
 
     // **ETAP 1: Odczytaj nagłówek długości (2 bajty)**
@@ -1403,13 +1470,50 @@ int16_t W5500_SocketReceiveMACRAW(const w5500_t* w5500, socket_t* sock, uint8_t*
     rx_rd_ptr += 2 + frame_length;
     rx_rd_bytes[0] = (uint8_t)(rx_rd_ptr >> 8);
     rx_rd_bytes[1] = (uint8_t)(rx_rd_ptr & 0xFF);
-    W5500_WriteReg(w5500, W5500_Sn_RXRD0, bsb, rx_rd_bytes, 2);
+    W5500_WriteReg(w5500, W5500_Sn_RX_RD0, bsb, rx_rd_bytes, 2);
 
     // Potwierdź odczyt
     uint8_t command = W5500_Sn_CR_RECV;
     W5500_WriteReg(w5500, W5500_Sn_CR, bsb, &command, 1);
 
     return frame_length;
+}
+
+void W5500_EnableInterrupts(const w5500_t* w5500, const uint8_t socket_mask, const uint8_t common_mask) {
+    if (!w5500 || !w5500->spi) return;
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) return;
+
+    // Włączenie przerwań socketów
+    W5500_WriteReg(w5500, W5500_SIMR, W5500_BSB_COMMON_REG, &socket_mask, 1);
+
+    // Włączenie przerwań wspólnych
+    W5500_WriteReg(w5500, W5500_IMR, W5500_BSB_COMMON_REG, &common_mask, 1);
+}
+
+void W5500_DisableInterrupts(const w5500_t* w5500) {
+    if (!w5500 || !w5500->spi) return;
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) return;
+
+    uint8_t zero = 0x00;
+    W5500_WriteReg(w5500, W5500_SIMR, W5500_BSB_COMMON_REG, &zero, 1);
+    W5500_WriteReg(w5500, W5500_IMR, W5500_BSB_COMMON_REG, &zero, 1);
+}
+
+uint8_t W5500_GetInterruptStatus(const w5500_t* w5500) {
+    if (!w5500 || !w5500->spi) return 0;
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) return 0;
+
+    uint8_t sir;
+    W5500_ReadReg(w5500, W5500_SIR, W5500_BSB_COMMON_REG, &sir, 1);
+    return sir;
+}
+
+void W5500_ClearInterrupt(const w5500_t* w5500, const uint8_t socket_num, const uint8_t interrupt_flags) {
+    if (!w5500 || !w5500->spi || socket_num >= W5500_MAX_SOCKETS) return;
+    if (!(w5500->spi->config->spi->CR1 & SPI_CR1_SPE)) return;
+
+    uint8_t bsb = W5500_GetSocketBSB_REG(socket_num);
+    W5500_WriteReg(w5500, W5500_Sn_IR, bsb, &interrupt_flags, 1);
 }
 
 uint8_t W5500_GetVersion(const w5500_t* w5500){
@@ -1479,8 +1583,6 @@ bool W5500_SelfTest(const w5500_t* w5500){
 
     return true;
 }
-
-
 
 void W5500_WriteReg(const w5500_t* w5500, uint16_t addr, uint8_t bsb, const void* data, uint8_t size){
     // Walidacja parametrów

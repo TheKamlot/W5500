@@ -64,6 +64,12 @@ typedef struct {
     w5500_network_config_t network;      // Konfiguracja sieciowa
     socket_t sockets[W5500_MAX_SOCKETS]; // Tablica socketów
     uint8_t active_sockets;              // Liczba aktywnych socketów
+    GPIO_TypeDef* RSTPort;
+    uint8_t RSTPin;
+    GPIO_TypeDef* INTPort;
+    uint8_t INTPin;
+    bool enableInterrupts;
+    uint8_t interruptPriority;
 } w5500_t;
 
 // Struktura dla informacji o pakiecie UDP/MACRAW
@@ -165,6 +171,15 @@ uint16_t W5500_SocketGetTxFreeSize(const w5500_t* w5500, const socket_t* sock);
 uint16_t W5500_SocketGetRxDataSize(const w5500_t* w5500, const socket_t* sock);
 bool W5500_SocketHasData(const w5500_t* w5500, const socket_t* sock);
 bool W5500_SocketCanSend(const w5500_t* w5500, const socket_t* sock, uint16_t size);
+
+// ============================================================================
+// PRZERWANIA
+// ============================================================================
+
+void W5500_EnableInterrupts(const w5500_t* w5500, const uint8_t socket_mask, const uint8_t common_mask);
+void W5500_DisableInterrupts(const w5500_t* w5500);
+uint8_t W5500_GetInterruptStatus(const w5500_t* w5500);
+void W5500_ClearInterrupt(const w5500_t* w5500, const uint8_t socket_num, const uint8_t interrupt_flags);
 
 // ============================================================================
 // FUNKCJE POMOCNICZE (podobnie jak w SPI)

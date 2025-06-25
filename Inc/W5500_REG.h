@@ -264,18 +264,4 @@
 #define W5500_SPI_OM_FDM2               0x02U                            /*!< Fixed Data Mode 2 bytes */
 #define W5500_SPI_OM_FDM4               0x03U                            /*!< Fixed Data Mode 4 bytes */
 
-// Socket RX/TX Pointers - BRAKOWAŁO
-#define W5500_Sn_TXFSR0     0x0020U    // Socket TX Free Size 0
-#define W5500_Sn_TXFSR1     0x0021U    // Socket TX Free Size 1
-#define W5500_Sn_TXRD0      0x0022U    // Socket TX Read Pointer 0
-#define W5500_Sn_TXRD1      0x0023U    // Socket TX Read Pointer 1
-#define W5500_Sn_TXWR0      0x0024U    // Socket TX Write Pointer 0
-#define W5500_Sn_TXWR1      0x0025U    // Socket TX Write Pointer 1
-#define W5500_Sn_RXRSR0     0x0026U    // Socket RX Received Size 0
-#define W5500_Sn_RXRSR1     0x0027U    // Socket RX Received Size 1
-#define W5500_Sn_RXRD0      0x0028U    // Socket RX Read Pointer 0
-#define W5500_Sn_RXRD1      0x0029U    // Socket RX Read Pointer 1
-#define W5500_Sn_RXWR0      0x002AU    // Socket RX Write Pointer 0
-#define W5500_Sn_RXWR1      0x002BU    // Socket RX Write Pointer 1
-
 #endif /* W5500_REG_H */
