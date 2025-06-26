@@ -18,14 +18,14 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-
-#include <sys/types.h>
-
+#include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "W5500.h"
+#include "W5500_REG.h"
+#include "usart.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -35,7 +35,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+static spi_t spi_handle;
+static w5500_t w5500;
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -58,6 +59,91 @@ void SystemClock_Config(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+// ===== W5500 TEST FUNCTIONS =====
+bool W5500_BasicTest(void)
+{
+    printf("=== TEST W5500 START ===\r\n");
+
+    // Konfiguracja SPI
+    static const spi_config_t spi_config = {
+        .spi = SPI1,
+        .dma = DMA2,
+        .dmastreamtx = 3,
+        .dmastreamrx = 2,
+        .dmachanneltx = 3,
+        .dmachannelrx = 3,
+        .BRpre = 4,              // Wolniejsza prędkość dla testu
+        .CSPort = GPIOD,
+        .CSPin = 14,
+        .MISOPort = GPIOA,
+        .MISOPin = 6,
+        .MOSIPort = GPIOA,
+        .MOSIPin = 7,
+        .SCKPort = GPIOA,
+        .SCKPin = 5
+    };
+
+    // 1. Inicjalizacja SPI
+    printf("1. Inicjalizacja SPI...\r\n");
+    spi_init_config(&spi_handle, &spi_config);
+    spi_init_peripheral(&spi_handle);
+    printf("   SPI OK\r\n");
+
+    // 2. Inicjalizacja W5500
+    printf("2. Inicjalizacja W5500...\r\n");
+    W5500_InitDefault(&w5500, &spi_handle);
+    W5500_InitPeripheral(&w5500);
+
+    if (!w5500.is_initialized) {
+        printf("   BŁĄD: W5500 nie zainicjowane!\r\n");
+        return false;
+    }
+    printf("   W5500 zainicjowane\r\n");
+
+    // 3. Test wersji układu
+    printf("3. Test wersji układu...\r\n");
+    uint8_t version = W5500_GetVersion(&w5500);
+    printf("   Wersja: 0x%02X ", version);
+
+    if (version == 0x04) {
+        printf("(OK)\r\n");
+    } else {
+        printf("(BŁĄD - oczekiwano 0x04)\r\n");
+        return false;
+    }
+
+    // 4. Self-test
+    printf("4. Self-test...\r\n");
+    if (W5500_SelfTest(&w5500)) {
+        printf("   Self-test PASSED\r\n");
+    } else {
+        printf("   Self-test FAILED\r\n");
+        return false;
+    }
+
+    // 5. Test konfiguracji sieciowej
+    printf("5. Test konfiguracji sieciowej...\r\n");
+    w5500_network_config_t net_config;
+    W5500_GetNetworkConfig(&w5500, &net_config);
+
+    printf("   MAC: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+           net_config.mac[0], net_config.mac[1], net_config.mac[2],
+           net_config.mac[3], net_config.mac[4], net_config.mac[5]);
+
+    printf("   IP:  %d.%d.%d.%d\r\n",
+           net_config.ip[0], net_config.ip[1],
+           net_config.ip[2], net_config.ip[3]);
+
+    // 6. Test PHY
+    printf("6. Test PHY...\r\n");
+    bool link_up = W5500_IsLinkUp(&w5500);
+    printf("   Link: %s\r\n", link_up ? "UP" : "DOWN");
+    uint8_t phy_config = W5500_GetPHYConfig(&w5500);
+    printf("   PHY Config: 0x%02X\r\n", phy_config);
+
+    printf("=== TEST W5500 ZAKOŃCZONY POMYŚLNIE ===\r\n");
+    return true;
+}
 /* USER CODE END 0 */
 
 /**
@@ -93,20 +179,24 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
 
+    W5500_BasicTest();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+      bool link_up = W5500_IsLinkUp(&w5500);
+      printf("   Link: %s\r\n", link_up ? "UP" : "DOWN");
+      uint8_t phy_config = W5500_GetPHYConfig(&w5500);
+      printf("   PHY Config: 0x%02X\r\n", phy_config);
+      for (volatile size_t i = 0; i < 180000000; i++) {}
+
     /* USER CODE END WHILE */
-    volatile uint32_t i = 18000000;
-    while (i>0) {
-      i--;
-    }
-    LL_GPIO_TogglePin(LD1_GPIO_Port, LD1_Pin );
+
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
@@ -159,7 +249,9 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+int __io_putchar(int ch) {
+    return USART_PutChar(ch);
+}
 /* USER CODE END 4 */
 
 /**

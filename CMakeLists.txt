@@ -37,10 +37,9 @@ enable_language(C ASM)
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME}
         Src/w5500.c
-        Inc/W5500.h
-        Inc/W5500_REG.h
-        Inc/spi.h
-        Src/spi.c)
+        Src/spi.c
+        Src/ring_buffer.c
+)
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
@@ -58,6 +57,9 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
+        Inc/W5500.h
+        Inc/W5500_REG.h
+        Inc/spi.h
 )
 
 # Add project symbols (macros)

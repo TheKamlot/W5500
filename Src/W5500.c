@@ -1604,7 +1604,7 @@ void W5500_WriteReg(const w5500_t* w5500, uint16_t addr, uint8_t bsb, const void
                           W5500_SPI_OM_VDM;
 
     // Aktywacja CS (LOW)
-    spi_set_cs(w5500->spi, false);
+    spi_set_cs(w5500->spi, true);
 
     // Wysłanie adresu (16 bitów, MSB first)
     spi_send(w5500->spi, (uint8_t)(addr >> 8));    // Starszy bajt adresu
@@ -1625,7 +1625,7 @@ void W5500_WriteReg(const w5500_t* w5500, uint16_t addr, uint8_t bsb, const void
     }
 
     // Deaktywacja CS (HIGH)
-    spi_set_cs(w5500->spi, true);
+    spi_set_cs(w5500->spi, false);
 }
 
 void W5500_ReadReg(const w5500_t* w5500, uint16_t addr, uint8_t bsb, void* data, uint8_t size){
@@ -1648,7 +1648,7 @@ void W5500_ReadReg(const w5500_t* w5500, uint16_t addr, uint8_t bsb, void* data,
                           W5500_SPI_OM_VDM;
 
     // Aktywacja CS (LOW)
-    spi_set_cs(w5500->spi, false);
+    spi_set_cs(w5500->spi, true);
 
     // Wysłanie adresu (16 bitów, MSB first)
     spi_send(w5500->spi, (uint8_t)(addr >> 8));    // Starszy bajt adresu
@@ -1669,7 +1669,7 @@ void W5500_ReadReg(const w5500_t* w5500, uint16_t addr, uint8_t bsb, void* data,
     }
 
     // Deaktywacja CS (HIGH)
-    spi_set_cs(w5500->spi, true);
+    spi_set_cs(w5500->spi, false);
 }
 
 void W5500_WriteIPAddress(const w5500_t* w5500, uint16_t base_addr, uint8_t bsb, const uint8_t* ip){

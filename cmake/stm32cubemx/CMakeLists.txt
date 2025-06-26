@@ -31,6 +31,7 @@ set(MX_Include_Dirs
 set(MX_Application_Src
     ${CMAKE_SOURCE_DIR}/Src/main.c
     ${CMAKE_SOURCE_DIR}/Src/gpio.c
+    ${CMAKE_SOURCE_DIR}/Src/usart.c
     ${CMAKE_SOURCE_DIR}/Src/stm32f4xx_it.c
     ${CMAKE_SOURCE_DIR}/Src/sysmem.c
     ${CMAKE_SOURCE_DIR}/Src/syscalls.c
@@ -41,6 +42,8 @@ set(MX_Application_Src
 set(STM32_Drivers_Src
     ${CMAKE_SOURCE_DIR}/Src/system_stm32f4xx.c
     ${CMAKE_SOURCE_DIR}/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_gpio.c
+    ${CMAKE_SOURCE_DIR}/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_usart.c
+    ${CMAKE_SOURCE_DIR}/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_dma.c
     ${CMAKE_SOURCE_DIR}/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_rcc.c
     ${CMAKE_SOURCE_DIR}/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_utils.c
     ${CMAKE_SOURCE_DIR}/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_exti.c
