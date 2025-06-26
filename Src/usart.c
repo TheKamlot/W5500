@@ -140,7 +140,6 @@ bool USART_GetChar(const char *c){
 
 
 size_t USART_ReadData(void *data,const size_t maxSize){
-  // TODO
   size_t pnt = 0;
   const char* charData = (const char*)data;
   while(USART_GetChar(charData + pnt) && (pnt + 1 <= maxSize)){
