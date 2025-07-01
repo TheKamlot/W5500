@@ -39,6 +39,7 @@ add_executable(${CMAKE_PROJECT_NAME}
         Src/w5500.c
         Src/spi.c
         Src/ring_buffer.c
+        Src/stm32f4xx_it.c
 )
 
 # Add STM32CubeMX generated sources
@@ -57,9 +58,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
-        Inc/W5500.h
-        Inc/W5500_REG.h
-        Inc/spi.h
+        Inc/
 )
 
 # Add project symbols (macros)

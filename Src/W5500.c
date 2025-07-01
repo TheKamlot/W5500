@@ -1,5 +1,6 @@
 #include "W5500.h"
 
+#include "main.h"
 void W5500_InitDefault(w5500_t* w5500, const spi_t* spi){
     // Walidacja parametrów (podobnie jak w spi_init_config)
     if (!w5500 || !spi) {
@@ -60,6 +61,12 @@ void W5500_InitDefault(w5500_t* w5500, const spi_t* spi){
     // Wyzerowanie liczników
     w5500->active_sockets = 0;
     w5500->phy_link_up = false;
+    w5500->RSTPort = NULL;
+    w5500->RSTPin = 0;
+    w5500->INTPort = GPIOD;
+    w5500->INTPin = 15;
+    w5500->enableInterrupts = true;
+    w5500->interruptPriority = 0;
 
     // Oznacz jako niezainicjalizowany (zostanie ustawiony w InitPeripheral)
     w5500->is_initialized = false;
@@ -158,9 +165,9 @@ void W5500_InitPeripheral(w5500_t* w5500){
         SYSCFG->EXTICR[pin / 4] &= ~(0xF << ((pin % 4) * 4));
         SYSCFG->EXTICR[pin / 4] |= (port_source << ((pin % 4) * 4));
 
-        // Włączenie przerwania na zbocze opadające (INT active low)
+        // Włączenie przerwania na zbocze opadające i narastające (INT active low)
         EXTI->FTSR |= (1U << pin);
-        EXTI->RTSR &= ~(1U << pin);
+        EXTI->RTSR |= (1U << pin);
 
         // Włączenie przerwania
         EXTI->IMR |= (1U << pin);
@@ -726,12 +733,14 @@ int8_t W5500_SocketOpen(const w5500_t* w5500, socket_t* sock){
 
     // 5. Sprawdź status socketu i aktualizuj flagę
     W5500_ReadReg(w5500, W5500_Sn_SR, bsb, &sock->status, 1);
+    uint16_t zero = 0;
+    W5500_WriteReg(w5500, W5500_Sn_RX_WR0, bsb, &zero, 2);
+    W5500_WriteReg(w5500, W5500_Sn_RX_RD0, bsb, &zero, 2);
 
     // Sprawdź czy socket został poprawnie otwarty (zgodnie z datasheetem)
     if (sock->status == W5500_Sn_SR_SOCK_INIT ||      // TCP
         sock->status == W5500_Sn_SR_SOCK_UDP ||       // UDP
         sock->status == W5500_Sn_SR_SOCK_MACRAW) {    // MACRAW
-
         sock->flags.is_open = true;
         return W5500_OK;
         }
@@ -975,7 +984,7 @@ void W5500_WriteBuffer(const w5500_t* w5500, uint16_t addr, uint8_t bsb, const u
                           W5500_SPI_OM_VDM;
 
     // Aktywacja CS (LOW)
-    spi_set_cs(w5500->spi, false);
+    spi_set_cs(w5500->spi, true);
 
     // Wysłanie adresu i kontroli (bez DMA - krótkie)
     spi_send(w5500->spi, (uint8_t)(addr >> 8));
@@ -998,7 +1007,7 @@ void W5500_WriteBuffer(const w5500_t* w5500, uint16_t addr, uint8_t bsb, const u
     }
 
     // Deaktywacja CS (HIGH) - automatyczna w spi_dma_send()
-    // spi_set_cs(w5500->spi, true); // Już zrobione przez DMA
+    // spi_set_cs(w5500->spi, false); // Już zrobione przez DMA
 }
 
 void W5500_ReadBuffer(const w5500_t* w5500, uint16_t addr, uint8_t bsb, uint8_t* data, uint16_t len){
@@ -1018,7 +1027,7 @@ void W5500_ReadBuffer(const w5500_t* w5500, uint16_t addr, uint8_t bsb, uint8_t*
                           W5500_SPI_OM_VDM;
 
     // Aktywacja CS (LOW)
-    spi_set_cs(w5500->spi, false);
+    spi_set_cs(w5500->spi, true);
 
     // Wysłanie adresu i kontroli
     spi_send(w5500->spi, (uint8_t)(addr >> 8));
@@ -1028,15 +1037,16 @@ void W5500_ReadBuffer(const w5500_t* w5500, uint16_t addr, uint8_t bsb, uint8_t*
     // **KLUCZOWE: Odczyt danych przez DMA**
     if (len > 16) {  // DMA dla większych bloków
         spi_dma_read((spi_t*)w5500->spi, data, len);
-
-        // Czekaj na zakończenie DMA
-        while (spi_is_dma_rx_busy((spi_t*)w5500->spi)) {
-            // Można dodać timeout
-        }
     } else {
         // Dla małych bloków - zwykłe SPI
         for (uint16_t i = 0; i < len; i++) {
             data[i] = spi_read(w5500->spi);
+        }
+        spi_set_cs(w5500->spi, false);
+        if (s0_state == header_read) {
+            s0_state = data_read;
+        }else if (s0_state == no_data) {
+            s0_state = header_read;
         }
     }
 
@@ -1202,7 +1212,7 @@ int16_t W5500_SocketSendRaw(const w5500_t* w5500, socket_t* sock, const uint8_t*
     }
 
     // **MACRAW: Walidacja rozmiaru ramki Ethernet (64-1514 bajtów)**
-    if (len < 64 || len > 1514) {
+    if (len > 1514) {
         return W5500_ERROR;
     }
 
@@ -1394,89 +1404,111 @@ int16_t W5500_SocketReceiveMACRAW(const w5500_t* w5500, socket_t* sock, uint8_t*
                                     w5500_packet_info_t* packet_info){
     // Walidacja parametrów
     if (!w5500 || !sock || !buffer || max_len == 0) {
+        s0_state = no_data;
         return W5500_ERROR;
     }
 
     // Sprawdź czy to socket MACRAW (tylko Socket 0)
     if (sock->protocol != W5500_Sn_MR_PROTOCOL_MACRAW || sock->socket_num != 0) {
+        s0_state = no_data;
         return W5500_ERROR;
     }
-
+    static uint16_t frame_length;
+    static  uint16_t rx_rd_ptr;
+    static uint8_t rx_rd_bytes[2];
     uint8_t bsb = W5500_GetSocketBSB_REG(0);
+    if (s0_state == no_data) {
+        uint8_t rx_size_bytes[2] = {0, 0};
+        W5500_ReadReg(w5500, W5500_Sn_RX_RSR0, bsb, rx_size_bytes, 2);
+        uint16_t available_data = (rx_size_bytes[1] << 8) | rx_size_bytes[0];
 
-    // Sprawdź ile danych jest dostępnych
-    uint8_t rx_size_bytes[2];
-    W5500_ReadReg(w5500, W5500_Sn_RX_RSR0, bsb, rx_size_bytes, 2);
-    uint16_t available_data = (rx_size_bytes[0] << 8) | rx_size_bytes[1];
-
-    if (available_data < 2) {
-        return W5500_NO_DATA; // Minimum nagłówek długości
-    }
-
-    // Pobierz RX Read Pointer
-    uint8_t rx_rd_bytes[2];
-    W5500_ReadReg(w5500, W5500_Sn_RX_RD0, bsb, rx_rd_bytes, 2);
-    uint16_t rx_rd_ptr = (rx_rd_bytes[0] << 8) | rx_rd_bytes[1];
-
-    // **ETAP 1: Odczytaj nagłówek długości (2 bajty)**
-    uint8_t length_header[2];
-    uint8_t rx_bsb = W5500_GetSocketBSB_RX(0);
-    W5500_ReadBuffer(w5500, rx_rd_ptr, rx_bsb, length_header, 2);
-
-    // **ETAP 2: Wyciągnij długość ramki**
-    uint16_t frame_length = (length_header[0] << 8) | length_header[1];
-
-    // Sprawdź czy cała ramka jest dostępna
-    if (available_data < (2 + frame_length)) {
-        // Ramka niekompletna
-        if (packet_info) {
-            packet_info->is_complete = false;
-            packet_info->packet_length = frame_length;
+        if (available_data < 2) {
+            s0_state = no_data;
+            return W5500_NO_DATA; // Minimum nagłówek długości
         }
-        return W5500_INCOMPLETE_PACKET;
+
+        // Pobierz RX Read Pointer
+        W5500_ReadReg(w5500, W5500_Sn_RX_RD0, bsb, rx_rd_bytes, 2);
+        rx_rd_ptr = (rx_rd_bytes[1] << 8) | rx_rd_bytes[0];
+
+        // **ETAP 1: Odczytaj nagłówek długości (2 bajty)**
+        uint8_t length_header[2];
+        uint8_t rx_bsb = W5500_GetSocketBSB_RX(0);
+        W5500_ReadBuffer(w5500, rx_rd_ptr, rx_bsb, length_header, 2);
+        //s0_state = header_read;
+        // **ETAP 2: Wyciągnij długość ramki**
+        frame_length = (length_header[0] << 8) | length_header[1];
+
+        // Sprawdź czy cała ramka jest dostępna
+        if (available_data < (frame_length)) {
+            // Ramka niekompletna
+            if (packet_info) {
+                packet_info->is_complete = false;
+                packet_info->packet_length = frame_length;
+            }
+            s0_state = no_data;
+            return W5500_INCOMPLETE_PACKET;
+        }
+
+        // Sprawdź rozmiar ramki (64-1514 bajtów dla Ethernet)
+        if (frame_length > 1514) {
+            s0_state = no_data;
+            rx_rd_ptr += frame_length;
+            rx_rd_bytes[1] = (uint8_t)(rx_rd_ptr >> 8);
+            rx_rd_bytes[0] = (uint8_t)(rx_rd_ptr & 0xFF);
+            W5500_WriteReg(w5500, W5500_Sn_RX_RD0, bsb, rx_rd_bytes, 2);
+            // uint8_t command = 0;
+            // do {
+            //     W5500_ReadReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+            // } while (command != 0x00);
+            // Potwierdź odczyt
+            uint8_t command = W5500_Sn_CR_RECV;
+            W5500_WriteReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+            return W5500_ERROR;
+        }
+
+        // Sprawdź czy bufor wystarczy
+        if (frame_length > max_len) {
+            frame_length = max_len;
+        }
+
+        // **ETAP 3: Odczytaj ramkę Ethernet**
+        W5500_ReadBuffer(w5500, rx_rd_ptr + 2, rx_bsb, buffer, frame_length - 2);
     }
+    if (s0_state == data_read) {
+        // **ETAP 4: Wypełnij informacje o ramce**
+        if (packet_info && frame_length >= 14) {
+            // MAC nadawcy (bajty 6-11 ramki Ethernet)
+            memcpy(packet_info->src_mac, &buffer[6], 6);
 
-    // Sprawdź rozmiar ramki (64-1514 bajtów dla Ethernet)
-    if (frame_length < 64 || frame_length > 1514) {
-        return W5500_ERROR;
+            // EtherType (bajty 12-13)
+            packet_info->ethertype = (buffer[12] << 8) | buffer[13];
+
+            // Długość i status
+            packet_info->packet_length = frame_length-2;
+            packet_info->is_complete = true;
+
+            // Wyzeruj pola UDP
+            memset(packet_info->src_ip, 0, 4);
+            packet_info->src_port = 0;
+        }
+
+        // **ETAP 5: Aktualizuj wskaźnik**
+        rx_rd_ptr += frame_length;
+        rx_rd_bytes[1] = (uint8_t)(rx_rd_ptr >> 8);
+        rx_rd_bytes[0] = (uint8_t)(rx_rd_ptr & 0xFF);
+        W5500_WriteReg(w5500, W5500_Sn_RX_RD0, bsb, rx_rd_bytes, 2);
+        // command = 0;
+        // do {
+        //     W5500_ReadReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+        // } while (command != 0x00);
+        // Potwierdź odczyt
+        uint8_t command = W5500_Sn_CR_RECV;
+        W5500_WriteReg(w5500, W5500_Sn_CR, bsb, &command, 1);
+        s0_state = socket_info_read;
+        return frame_length;
     }
-
-    // Sprawdź czy bufor wystarczy
-    if (frame_length > max_len) {
-        frame_length = max_len;
-    }
-
-    // **ETAP 3: Odczytaj ramkę Ethernet**
-    W5500_ReadBuffer(w5500, rx_rd_ptr + 2, rx_bsb, buffer, frame_length);
-
-    // **ETAP 4: Wypełnij informacje o ramce**
-    if (packet_info && frame_length >= 14) {
-        // MAC nadawcy (bajty 6-11 ramki Ethernet)
-        memcpy(packet_info->src_mac, &buffer[6], 6);
-
-        // EtherType (bajty 12-13)
-        packet_info->ethertype = (buffer[12] << 8) | buffer[13];
-
-        // Długość i status
-        packet_info->packet_length = frame_length;
-        packet_info->is_complete = true;
-
-        // Wyzeruj pola UDP
-        memset(packet_info->src_ip, 0, 4);
-        packet_info->src_port = 0;
-    }
-
-    // **ETAP 5: Aktualizuj wskaźnik**
-    rx_rd_ptr += 2 + frame_length;
-    rx_rd_bytes[0] = (uint8_t)(rx_rd_ptr >> 8);
-    rx_rd_bytes[1] = (uint8_t)(rx_rd_ptr & 0xFF);
-    W5500_WriteReg(w5500, W5500_Sn_RX_RD0, bsb, rx_rd_bytes, 2);
-
-    // Potwierdź odczyt
-    uint8_t command = W5500_Sn_CR_RECV;
-    W5500_WriteReg(w5500, W5500_Sn_CR, bsb, &command, 1);
-
-    return frame_length;
+    return W5500_DMA_IN_PROGRESS;
 }
 
 void W5500_EnableInterrupts(const w5500_t* w5500, const uint8_t socket_mask, const uint8_t common_mask) {

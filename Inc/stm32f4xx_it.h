@@ -24,6 +24,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+#include "spi.h"
+#include "W5500.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -32,7 +34,9 @@ extern "C" {
 
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
-
+  extern spi_t spi_handle;
+  extern spi_config_t spi_config;
+  extern w5500_t w5500;
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/
@@ -56,7 +60,8 @@ void DebugMon_Handler(void);
 void PendSV_Handler(void);
 void SysTick_Handler(void);
 /* USER CODE BEGIN EFP */
-
+void DMA2_Stream0_IRQHandler(void);
+void DMA2_Stream3_IRQHandler(void);
 /* USER CODE END EFP */
 
 #ifdef __cplusplus

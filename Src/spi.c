@@ -5,7 +5,7 @@ static const spi_config_t default_config = {
     .spi = SPI1,
     .dma = DMA2,
     .dmastreamtx = 3,
-    .dmastreamrx = 2,
+    .dmastreamrx = 0,
     .dmachanneltx = 3,
     .dmachannelrx = 3,
     .BRpre = 2,
@@ -335,6 +335,7 @@ void spi_dma_send(spi_t* spi, const uint8_t* txData, const uint16_t size) {
 
 // Odbiór z DMA
 void spi_dma_read(spi_t* spi, const uint8_t* rxData, const uint16_t size) {
+
     while (spi->mRXbusy){};
     spi->mRXbusy = true;
     
@@ -347,16 +348,17 @@ void spi_dma_read(spi_t* spi, const uint8_t* rxData, const uint16_t size) {
     while (spi->mdmastreamtx->CR & DMA_SxCR_EN){};
     
     // DMA RX configuration
-    spi->mdmastreamrx->M0AR = (uint32_t)rxData;
-    spi->mdmastreamrx->PAR = (uint32_t)&spi->config->spi->DR;
+    spi->mdmastreamrx->M0AR = (uint32_t)(rxData);
+    spi->mdmastreamrx->PAR = (uint32_t)(&spi->config->spi->DR);
     spi->mdmastreamrx->NDTR = size;
+
     spi->mdmastreamrx->CR &= ~DMA_SxCR_DIR;
     spi->mdmastreamrx->CR |= DMA_SxCR_MINC;
     spi->mdmastreamrx->CR &= ~DMA_SxCR_PINC;
     
     // DMA TX configuration (dummy bytes)
-    spi->mdmastreamtx->M0AR = (uint32_t)&txData;
-    spi->mdmastreamtx->PAR = (uint32_t)&spi->config->spi->DR;
+    spi->mdmastreamtx->M0AR = (uint32_t)(&txData);
+    spi->mdmastreamtx->PAR = (uint32_t)(&spi->config->spi->DR);
     spi->mdmastreamtx->NDTR = size;
     spi->mdmastreamtx->CR |= DMA_SxCR_DIR_0;
     spi->mdmastreamtx->CR &= ~DMA_SxCR_MINC;
@@ -366,8 +368,8 @@ void spi_dma_read(spi_t* spi, const uint8_t* rxData, const uint16_t size) {
     spi->mdmastreamtx->CR |= DMA_SxCR_EN;
     spi->mdmastreamrx->CR |= DMA_SxCR_EN;
     
-    spi->config->spi->CR2 |= SPI_CR2_RXDMAEN | SPI_CR2_TXDMAEN;
-    spi_set_cs(spi, true);
+    spi->config->spi->CR2 |= (SPI_CR2_RXDMAEN | SPI_CR2_TXDMAEN);
+    //spi_set_cs(spi, true);
 }
 
 // Włączenie przerwań SPI
@@ -436,7 +438,7 @@ void spi_clear_dma_tx_busy(spi_t* spi) {
     spi_clear_ifcr(spi->mdmastreamtx);
     spi->mTXbusy = false;
     if (!spi->mTXbusy && !spi->mRXbusy) {
-        spi->config->CSPort->BSRR = (1 << (spi->config->CSPin + 16));
+        spi_set_cs(spi, false);
     }
     spi->config->spi->CR2 &= ~SPI_CR2_TXDMAEN;
 }
@@ -458,11 +460,11 @@ void spi_clear_dma_rx_busy(spi_t* spi) {
     spi_clear_ifcr(spi->mdmastreamrx);
     spi->mRXbusy = false;
     if (!spi->mTXbusy && !spi->mRXbusy) {
-        spi->config->CSPort->BSRR = (1 << (spi->config->CSPin + 16));
+        spi_set_cs(spi, false);
     }
 }
 
-void spi_set_cs(const spi_t* spi, bool state) {
+void spi_set_cs(const spi_t* spi, const bool state) {
     if (state) {
         spi->config->CSPort->BSRR = (1 << (spi->config->CSPin + 16));
     } else {

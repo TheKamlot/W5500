@@ -199,5 +199,35 @@ void SysTick_Handler(void)
 /******************************************************************************/
 
 /* USER CODE BEGIN 1 */
+// INTERRUPT INT PIN
+void EXTI15_10_IRQHandler() {
+  if(EXTI->PR & EXTI_PR_PR15) {
+    if((GPIOD->IDR & 0x8000) != 0) {
+      w5500.isInterrupts = false;   /* zapamiętaj zgłoszenie */
+    } else if((GPIOD->IDR & 0x8000) == 0) {
+      w5500.isInterrupts = true;   /* zapamiętaj zgłoszenie */
+    }
+    EXTI->PR  = EXTI_PR_PR15;      /* skasuj flagę EXTI – wymagane[9] */
+  }
+}
+
+// INTERRUPT SPI DMA TX
+void DMA2_Stream3_IRQHandler(void){
+  spi_clear_dma_tx_busy(&spi_handle);
+  buf_tx_0_done = true;
+}
+
+// INTERRUPT SPI DMA RX
+void DMA2_Stream0_IRQHandler(void){
+  spi_clear_dma_tx_busy(&spi_handle);
+  spi_clear_dma_rx_busy(&spi_handle);
+  spi_set_cs(&spi_handle, false);
+  if (s0_state == header_read) {
+    s0_state = data_read;
+  }else if (s0_state == no_data) {
+    s0_state = header_read;
+  }
+
+}
 
 /* USER CODE END 1 */

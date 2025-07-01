@@ -247,6 +247,84 @@
 #define W5500_Sn_SR_SOCK_UDP           0x22U   // UDP socket
 #define W5500_Sn_SR_SOCK_MACRAW        0x42U   // MAC raw mode socket
 
+/* Bit definition for W5500_IR register */
+#define W5500_IR_CONFLICT_Pos           7U
+#define W5500_IR_CONFLICT_Msk           (0x1UL << W5500_IR_CONFLICT_Pos)  /*!< 0x80 */
+#define W5500_IR_CONFLICT               W5500_IR_CONFLICT_Msk             /*!< IP Conflict */
+
+#define W5500_IR_UNREACH_Pos            6U
+#define W5500_IR_UNREACH_Msk            (0x1UL << W5500_IR_UNREACH_Pos)   /*!< 0x40 */
+#define W5500_IR_UNREACH                W5500_IR_UNREACH_Msk              /*!< Destination Unreachable */
+
+#define W5500_IR_PPPOEC_Pos             5U
+#define W5500_IR_PPPOEC_Msk             (0x1UL << W5500_IR_PPPOEC_Pos)    /*!< 0x20 */
+#define W5500_IR_PPPOEC                 W5500_IR_PPPOEC_Msk               /*!< PPPoE Connection Close */
+
+#define W5500_IR_MP_Pos                 4U
+#define W5500_IR_MP_Msk                 (0x1UL << W5500_IR_MP_Pos)        /*!< 0x10 */
+#define W5500_IR_MP                     W5500_IR_MP_Msk                   /*!< Magic Packet */
+
+/* Bit definition for W5500_IMR register */
+#define W5500_IMR_CONFLICT_Pos          7U
+#define W5500_IMR_CONFLICT_Msk          (0x1UL << W5500_IMR_CONFLICT_Pos) /*!< 0x80 */
+#define W5500_IMR_CONFLICT              W5500_IMR_CONFLICT_Msk            /*!< IP Conflict Mask */
+
+#define W5500_IMR_UNREACH_Pos           6U
+#define W5500_IMR_UNREACH_Msk           (0x1UL << W5500_IMR_UNREACH_Pos)  /*!< 0x40 */
+#define W5500_IMR_UNREACH               W5500_IMR_UNREACH_Msk             /*!< Destination Unreachable Mask */
+
+#define W5500_IMR_PPPOEC_Pos            5U
+#define W5500_IMR_PPPOEC_Msk            (0x1UL << W5500_IMR_PPPOEC_Pos)   /*!< 0x20 */
+#define W5500_IMR_PPPOEC                W5500_IMR_PPPOEC_Msk              /*!< PPPoE Connection Close Mask */
+
+#define W5500_IMR_MP_Pos                4U
+#define W5500_IMR_MP_Msk                (0x1UL << W5500_IMR_MP_Pos)       /*!< 0x10 */
+#define W5500_IMR_MP                    W5500_IMR_MP_Msk                  /*!< Magic Packet Mask */
+
+/* Bit definition for W5500_Sn_IR register */
+#define W5500_Sn_IR_SENDOK_Pos          4U
+#define W5500_Sn_IR_SENDOK_Msk          (0x1UL << W5500_Sn_IR_SENDOK_Pos) /*!< 0x10 */
+#define W5500_Sn_IR_SENDOK              W5500_Sn_IR_SENDOK_Msk            /*!< Send OK */
+
+#define W5500_Sn_IR_TIMEOUT_Pos         3U
+#define W5500_Sn_IR_TIMEOUT_Msk         (0x1UL << W5500_Sn_IR_TIMEOUT_Pos) /*!< 0x08 */
+#define W5500_Sn_IR_TIMEOUT             W5500_Sn_IR_TIMEOUT_Msk           /*!< Timeout */
+
+#define W5500_Sn_IR_RECV_Pos            2U
+#define W5500_Sn_IR_RECV_Msk            (0x1UL << W5500_Sn_IR_RECV_Pos)   /*!< 0x04 */
+#define W5500_Sn_IR_RECV                W5500_Sn_IR_RECV_Msk              /*!< Receive Data */
+
+#define W5500_Sn_IR_DISCON_Pos          1U
+#define W5500_Sn_IR_DISCON_Msk          (0x1UL << W5500_Sn_IR_DISCON_Pos) /*!< 0x02 */
+#define W5500_Sn_IR_DISCON              W5500_Sn_IR_DISCON_Msk            /*!< Disconnect */
+
+#define W5500_Sn_IR_CON_Pos             0U
+#define W5500_Sn_IR_CON_Msk             (0x1UL << W5500_Sn_IR_CON_Pos)    /*!< 0x01 */
+#define W5500_Sn_IR_CON                 W5500_Sn_IR_CON_Msk               /*!< Connect */
+
+/* Bit definition for W5500_Sn_IMR register */
+#define W5500_Sn_IMR_SENDOK_Pos         4U
+#define W5500_Sn_IMR_SENDOK_Msk         (0x1UL << W5500_Sn_IMR_SENDOK_Pos) /*!< 0x10 */
+#define W5500_Sn_IMR_SENDOK             W5500_Sn_IMR_SENDOK_Msk           /*!< Send OK Mask */
+
+#define W5500_Sn_IMR_TIMEOUT_Pos        3U
+#define W5500_Sn_IMR_TIMEOUT_Msk        (0x1UL << W5500_Sn_IMR_TIMEOUT_Pos) /*!< 0x08 */
+#define W5500_Sn_IMR_TIMEOUT            W5500_Sn_IMR_TIMEOUT_Msk          /*!< Timeout Mask */
+
+#define W5500_Sn_IMR_RECV_Pos           2U
+#define W5500_Sn_IMR_RECV_Msk           (0x1UL << W5500_Sn_IMR_RECV_Pos)  /*!< 0x04 */
+#define W5500_Sn_IMR_RECV               W5500_Sn_IMR_RECV_Msk             /*!< Receive Data Mask */
+
+#define W5500_Sn_IMR_DISCON_Pos         1U
+#define W5500_Sn_IMR_DISCON_Msk         (0x1UL << W5500_Sn_IMR_DISCON_Pos) /*!< 0x02 */
+#define W5500_Sn_IMR_DISCON             W5500_Sn_IMR_DISCON_Msk           /*!< Disconnect Mask */
+
+#define W5500_Sn_IMR_CON_Pos            0U
+#define W5500_Sn_IMR_CON_Msk            (0x1UL << W5500_Sn_IMR_CON_Pos)   /*!< 0x01 */
+#define W5500_Sn_IMR_CON                W5500_Sn_IMR_CON_Msk
+
+
+
 /* SPI Control */
 #define W5500_SPI_BSB_Pos               3U
 #define W5500_SPI_BSB_Msk               (0x1FUL << W5500_SPI_BSB_Pos)    /*!< 0xF8 */

@@ -28,6 +28,7 @@ extern "C" {
 
 /* Includes ------------------------------------------------------------------*/
 
+#include "spi.h"
 #include "stm32f4xx_ll_rcc.h"
 #include "stm32f4xx_ll_bus.h"
 #include "stm32f4xx_ll_system.h"
@@ -38,6 +39,8 @@ extern "C" {
 #include "stm32f4xx_ll_dma.h"
 #include "stm32f4xx_ll_usart.h"
 #include "stm32f4xx_ll_gpio.h"
+#include "W5500.h"
+#include "W5500_REG.h"
 
 #if defined(USE_FULL_ASSERT)
 #include "stm32_assert.h"
@@ -55,7 +58,15 @@ extern "C" {
 
 /* Exported constants --------------------------------------------------------*/
 /* USER CODE BEGIN EC */
-
+    extern spi_t spi_handle;
+    extern spi_config_t spi_config;
+    extern w5500_t w5500;
+    extern socket_t s0;
+    extern bool buf_rx_0_done;
+    extern bool buf_tx_0_done;
+    extern bool packet_ready;
+    extern enum reciver_state s0_state;
+    extern bool debug;
 /* USER CODE END EC */
 
 /* Exported macro ------------------------------------------------------------*/
